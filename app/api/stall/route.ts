@@ -5,7 +5,7 @@ import { errorResponse, resolveKey } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Lấy các món đang rao bán trong stall của chủ API key. */
+/** Lấy các món đang rao bán trong stall của chủ API key (kèm Steam ID để dùng cho mục Kho đồ). */
 export async function GET(req: Request) {
   const key = resolveKey(req);
   if (!key) {
@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   try {
     const steamId = await fetchMySteamId(key);
     const listings = await fetchMyListings(key, steamId);
-    return NextResponse.json({ listings, fetchedAt: new Date().toISOString() });
+    return NextResponse.json({ listings, steamId, fetchedAt: new Date().toISOString() });
   } catch (e) {
     return errorResponse(e);
   }

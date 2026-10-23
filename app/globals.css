@@ -126,3 +126,17 @@ button.small { padding: 5px 10px; font-size: 13px; }
   .item { grid-template-columns: 72px 1fr; }
   .item .img { width: 72px; height: 56px; }
 }
+
+.inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.inv-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px; display: flex; flex-direction: column; gap: 6px;
+}
+.inv-card .img {
+  height: 96px; display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border-radius: 8px; overflow: hidden;
+}
+.inv-card .img img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.inv-card .name { font-weight: 600; font-size: 13px; word-break: break-word; }
+.inv-card .meta { color: var(--muted); font-size: 12px; }
+.view-tabs { display: flex; gap: 6px; margin-bottom: 16px; }

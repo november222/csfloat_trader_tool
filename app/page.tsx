@@ -5,6 +5,7 @@ import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@
 import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
+import Inventory from "./Inventory";
 import { SORT_LABELS, sortRows, type SortDir, type SortKey } from "@/lib/sort";
 
 type SurveyState = SurveyResult | { error: string };
@@ -20,6 +21,7 @@ const LS_KEY = "csf_api_key";
 const LS_TRADES = "csf_trades_cache";
 const LS_SURVEYS = "csf_surveys_cache";
 const LS_MANUAL = "csf_manual_buys"; // giá mua nhập tay (cent) theo khoá của từng dòng
+const LS_STEAM_ID = "csf_steam_id";
 const LS_MANUAL_SELL = "csf_manual_sells"; // giá bán nhập tay (bán ở sàn khác) theo khoá của từng dòng
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
 const PART_GAP_MS = 2000; // nghỉ giữa các phần khi tải (lịch sử mua → bán → stall)
@@ -85,6 +87,8 @@ export default function Home() {
   const [fee, setFee] = useState(2);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [view, setView] = useState<"trades" | "inventory">("trades");
+  const [steamId, setSteamId] = useState("");
   const [showAdv, setShowAdv] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]); // rỗng = tất cả loại
   const [sortKey, setSortKey] = useState<SortKey>("default");
@@ -123,6 +127,8 @@ export default function Home() {
     if (m) setManualBuys(m);
     const ms = readLS<Record<string, ManualSell>>(LS_MANUAL_SELL);
     if (ms) setManualSells(ms);
+    const sid = readLS<string>(LS_STEAM_ID);
+    if (sid) setSteamId(sid);
   }, []);
 
   /** Lưu hoặc xoá (ms = null) giá bán nhập tay (bán ở sàn khác) của một dòng. */
@@ -186,6 +192,11 @@ export default function Home() {
     }
   };
 
+  const updateSteamId = (id: string) => {
+    setSteamId(id);
+    writeLS(LS_STEAM_ID, id);
+  };
+
   const callApi = async (url: string) => {
     const res = await fetch(url, { headers: headers() });
     const data = await res.json().catch(() => ({}));
@@ -206,6 +217,7 @@ export default function Home() {
         if (part === "stall") {
           const d = await callApi("/api/stall");
           setListings(d.listings ?? []);
+          if (d.steamId) updateSteamId(String(d.steamId));
         } else {
           const d = await callApi(`/api/trades?role=${part}`);
           if (part === "buyer") setBuys(d.trades ?? []);
@@ -305,6 +317,17 @@ export default function Home() {
   };
 
   const hasData = trades.length > 0 || listings.length > 0;
+
+  // Số món đang giữ/đang rao theo tên, dùng để đối chiếu với kho đồ Steam
+  const holdingCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const r of rows) {
+      if (r.status === "holding" || r.status === "listed" || r.status === "listed_unknown_buy") {
+        c[r.item.marketHashName] = (c[r.item.marketHashName] ?? 0) + 1;
+      }
+    }
+    return c;
+  }, [rows]);
   const roi = summary.investedSoldCents > 0 ? (summary.realizedProfitCents / summary.investedSoldCents) * 100 : null;
 
   return (
@@ -317,6 +340,21 @@ export default function Home() {
         {fetchedAt && <div className="hint">Cập nhật: {new Date(fetchedAt).toLocaleString("vi-VN")}</div>}
       </header>
 
+      <div className="view-tabs">
+        <button className={`tab ${view === "trades" ? "active" : ""}`} onClick={() => setView("trades")}>
+          Giao dịch
+        </button>
+        <button className={`tab ${view === "inventory" ? "active" : ""}`} onClick={() => setView("inventory")}>
+          Kho đồ
+        </button>
+      </div>
+
+      {view === "inventory" && (
+        <Inventory steamId={steamId} onSteamId={updateSteamId} holdingCounts={holdingCounts} hasTrades={hasData} />
+      )}
+
+      {view === "trades" && (
+        <>
       <section className="panel">
         <div className="row-inline">
           <input
@@ -535,6 +573,8 @@ export default function Home() {
 
       {!hasData && !loading && !error && (
         <div className="empty">Nhập API key rồi bấm “Tải giao dịch & stall” để bắt đầu.</div>
+      )}
+        </>
       )}
     </div>
   );
