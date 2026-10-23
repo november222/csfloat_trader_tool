@@ -6,6 +6,7 @@ import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import Inventory from "./Inventory";
+import { CsfloatError, NetworkError, fetchMyListings, fetchMySteamId, fetchTrades, runSurvey } from "@/lib/csfloat";
 import { SORT_LABELS, sortRows, type SortDir, type SortKey } from "@/lib/sort";
 
 type SurveyState = SurveyResult | { error: string };
@@ -22,6 +23,15 @@ const LS_TRADES = "csf_trades_cache";
 const LS_SURVEYS = "csf_surveys_cache";
 const LS_MANUAL = "csf_manual_buys"; // giá mua nhập tay (cent) theo khoá của từng dòng
 const LS_STEAM_ID = "csf_steam_id";
+const LS_CALL_MODE = "csf_call_mode"; // cách gọi CSFloat: auto | direct | server
+const LS_DIRECT_BLOCKED = "csf_direct_blocked"; // trình duyệt từng bị chặn khi gọi trực tiếp (CORS)
+
+type CallMode = "auto" | "direct" | "server";
+const CALL_MODE_LABELS: Record<CallMode, string> = {
+  auto: "Tự động (ưu tiên trình duyệt của bạn)",
+  direct: "Chỉ trình duyệt của bạn",
+  server: "Chỉ qua server (Vercel)",
+};
 const LS_MANUAL_SELL = "csf_manual_sells"; // giá bán nhập tay (bán ở sàn khác) theo khoá của từng dòng
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
 const PART_GAP_MS = 2000; // nghỉ giữa các phần khi tải (lịch sử mua → bán → stall)
@@ -88,6 +98,9 @@ export default function Home() {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [view, setView] = useState<"trades" | "inventory">("trades");
+  const [callMode, setCallMode] = useState<CallMode>("auto");
+  const [lastPath, setLastPath] = useState<"direct" | "server" | null>(null);
+  const directBlocked = useRef(false);
   const [steamId, setSteamId] = useState("");
   const [showAdv, setShowAdv] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]); // rỗng = tất cả loại
@@ -129,6 +142,9 @@ export default function Home() {
     if (ms) setManualSells(ms);
     const sid = readLS<string>(LS_STEAM_ID);
     if (sid) setSteamId(sid);
+    const cm = readLS<CallMode>(LS_CALL_MODE);
+    if (cm === "auto" || cm === "direct" || cm === "server") setCallMode(cm);
+    directBlocked.current = readLS<boolean>(LS_DIRECT_BLOCKED) === true;
   }, []);
 
   /** Lưu hoặc xoá (ms = null) giá bán nhập tay (bán ở sàn khác) của một dòng. */
@@ -206,6 +222,49 @@ export default function Home() {
     return data;
   };
 
+  const changeCallMode = (m: CallMode) => {
+    setCallMode(m);
+    writeLS(LS_CALL_MODE, m);
+    if (m !== "server") {
+      directBlocked.current = false; // cho thử lại cách gọi trực tiếp
+      writeLS(LS_DIRECT_BLOCKED, false);
+    }
+  };
+
+  /**
+   * Gọi CSFloat từ trình duyệt của bạn (IP nhà bạn, không bị tính là nhiều IP như server Vercel);
+   * ở chế độ tự động, nếu trình duyệt không gọi được (CORS) thì chuyển sang gọi qua server.
+   */
+  const viaCsfloat = async <T,>(direct: () => Promise<T>, server: () => Promise<T>): Promise<T> => {
+    const canDirect = apiKey !== "" && (callMode === "direct" || (callMode === "auto" && !directBlocked.current));
+    if (canDirect) {
+      try {
+        const r = await direct();
+        setLastPath("direct");
+        return r;
+      } catch (e) {
+        if (e instanceof NetworkError) {
+          if (callMode === "direct") {
+            throw new ApiError(
+              "Trình duyệt không gọi trực tiếp được tới CSFloat (nhiều khả năng CSFloat không cho phép gọi từ trang web khác). Hãy chọn chế độ Tự động hoặc chạy ứng dụng trên máy bạn.",
+              0,
+              null,
+            );
+          }
+          directBlocked.current = true;
+          writeLS(LS_DIRECT_BLOCKED, true);
+        } else if (e instanceof CsfloatError) {
+          throw new ApiError(e.message, e.status, e.retryAfter ?? null, e.detail ?? null);
+        } else {
+          throw e;
+        }
+      }
+    }
+    const r = await server();
+    setLastPath("server");
+    return r;
+  };
+
   /** Tải từng phần một (không gửi song song), nghỉ giữa các phần. Gặp 429 thì dừng ngay và đếm ngược. */
   const loadParts = async (parts: Part[]) => {
     setLoading(true);
@@ -215,11 +274,20 @@ export default function Home() {
       setProgress(`Đang tải ${PART_LABEL[part]} (${i + 1}/${parts.length})…`);
       try {
         if (part === "stall") {
-          const d = await callApi("/api/stall");
+          const d = await viaCsfloat(
+            async () => {
+              const id = await fetchMySteamId(apiKey);
+              return { listings: await fetchMyListings(apiKey, id), steamId: id };
+            },
+            () => callApi("/api/stall"),
+          );
           setListings(d.listings ?? []);
           if (d.steamId) updateSteamId(String(d.steamId));
         } else {
-          const d = await callApi(`/api/trades?role=${part}`);
+          const d = await viaCsfloat(
+            async () => ({ trades: await fetchTrades(apiKey, part) }),
+            () => callApi(`/api/trades?role=${part}`),
+          );
           if (part === "buyer") setBuys(d.trades ?? []);
           else setSells(d.trades ?? []);
         }
@@ -255,7 +323,10 @@ export default function Home() {
         float: String(float),
         tol: String(tol),
       });
-      const data = await callApi(`/api/survey?${q.toString()}`);
+      const data = await viaCsfloat(
+        () => runSurvey(apiKey, row.item.marketHashName, float, tol),
+        () => callApi(`/api/survey?${q.toString()}`),
+      );
       setSurveys((prev) => {
         const next = { ...prev, [row.key]: data as SurveyResult };
         writeLS(LS_SURVEYS, next);
@@ -393,6 +464,23 @@ export default function Home() {
             {progress}
           </div>
         )}
+        <div className="row-inline" style={{ marginTop: 8 }}>
+          <label className="hint">
+            Cách gọi CSFloat{" "}
+            <select value={callMode} onChange={(e) => changeCallMode(e.target.value as CallMode)}>
+              {(Object.keys(CALL_MODE_LABELS) as CallMode[]).map((m) => (
+                <option key={m} value={m}>
+                  {CALL_MODE_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {lastPath && (
+            <span className="hint">
+              Lần gọi gần nhất đi qua: {lastPath === "direct" ? "trình duyệt của bạn" : "server"}
+            </span>
+          )}
+        </div>
         <div className="hint" style={{ marginTop: 8 }}>
           Key được lưu trong trình duyệt của bạn và chỉ gửi qua server của trang này tới CSFloat. Dữ liệu đã tải được
           lưu tạm trong trình duyệt nên không cần tải lại mỗi lần mở trang; chỉ làm mới khi cần để tránh bị CSFloat giới

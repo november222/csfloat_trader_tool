@@ -1,4 +1,5 @@
-import type { NormListing, NormTrade, Role, TradeItem } from "./types";
+import type { NormListing, NormTrade, Role, SurveyResult, TradeItem } from "./types";
+import { buildSurvey, floatRange } from "./survey";
 
 export const CSFLOAT_BASE = "https://csfloat.com/api/v1";
 
@@ -20,6 +21,13 @@ export class CsfloatError extends Error {
     this.status = status;
     this.retryAfter = retryAfter;
     this.detail = detail;
+  }
+}
+
+/** Không kết nối được tới CSFloat (mạng lỗi, hoặc trình duyệt bị chặn CORS khi gọi trực tiếp). */
+export class NetworkError extends CsfloatError {
+  constructor() {
+    super(0, "Không kết nối được tới CSFloat.");
   }
 }
 
@@ -46,14 +54,20 @@ async function buildDetail(res: Response, path: string, attempts: number): Promi
 
 export async function csfloatGet(path: string, apiKey: string): Promise<unknown> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${CSFLOAT_BASE}${path}`, {
-      headers: {
-        Authorization: apiKey,
-        Accept: "application/json",
-        "User-Agent": "csfloat-trader-tool/1.0",
-      },
-      cache: "no-store",
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${CSFLOAT_BASE}${path}`, {
+        headers: {
+          Authorization: apiKey,
+          Accept: "application/json",
+          // Trình duyệt không cho tự đặt User-Agent; chỉ đặt khi chạy ở server
+          ...(typeof window === "undefined" ? { "User-Agent": "csfloat-trader-tool/1.0" } : {}),
+        },
+        cache: "no-store",
+      });
+    } catch {
+      throw new NetworkError();
+    }
     if (res.status === 429) {
       const ra = Number(res.headers.get("retry-after"));
       const retryAfter = Number.isFinite(ra) && ra > 0 ? Math.ceil(ra) : null;
@@ -229,4 +243,11 @@ export async function fetchSimilarListings(
       floatValue: typeof l?.item?.float_value === "number" ? l.item.float_value : null,
       iconUrl: typeof l?.item?.icon_url === "string" ? l.item.icon_url : null,
     }));
+}
+
+/** Khảo giá một món: đúng 1 request tới CSFloat. Chạy được ở cả server lẫn trình duyệt. */
+export async function runSurvey(apiKey: string, marketHashName: string, float: number, tol: number): Promise<SurveyResult> {
+  const { floatMin, floatMax } = floatRange(float, tol);
+  const listings = await fetchSimilarListings(apiKey, { marketHashName, minFloat: floatMin, maxFloat: floatMax });
+  return buildSurvey(listings, float, tol);
 }

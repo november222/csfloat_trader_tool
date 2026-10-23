@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test tests/pnl.test.ts tests/filters.test.ts tests/inventory.test.ts"
+    "test": "node --experimental-strip-types --test tests/pnl.test.ts tests/filters.test.ts tests/inventory.test.ts tests/survey.test.ts"
   },
   "dependencies": {
     "next": "^14.2.15",
