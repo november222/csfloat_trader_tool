@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
 import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
+import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
+import { SORT_LABELS, sortRows, type SortDir, type SortKey } from "@/lib/sort";
 
 type SurveyState = SurveyResult | { error: string };
 type Filter = "all" | "sold" | "listed" | "holding";
@@ -83,6 +85,10 @@ export default function Home() {
   const [fee, setFee] = useState(2);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [showAdv, setShowAdv] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]); // rỗng = tất cả loại
+  const [sortKey, setSortKey] = useState<SortKey>("default");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [tol, setTol] = useState(0.001);
   const [surveys, setSurveys] = useState<Record<string, SurveyState>>({});
   const [surveying, setSurveying] = useState<string | null>(null);
@@ -261,7 +267,8 @@ export default function Home() {
   );
   const summary = useMemo(() => summarize(rows), [rows]);
 
-  const visible = useMemo(() => {
+  // Lọc theo trạng thái + tên trước; số lượng từng loại vật phẩm tính trên tập này
+  const baseFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
       if (filter === "sold" && r.status !== "sold" && r.status !== "sold_unknown_buy") return false;
@@ -271,6 +278,31 @@ export default function Home() {
       return true;
     });
   }, [rows, filter, query]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<Category, number> = {
+      knife: 0, gloves: 0, rifle: 0, sniper: 0, pistol: 0, smg: 0, shotgun: 0, machinegun: 0, other: 0,
+    };
+    for (const r of baseFiltered) counts[categoryOf(r.item.marketHashName)]++;
+    return counts;
+  }, [baseFiltered]);
+
+  const visible = useMemo(() => {
+    const byCategory =
+      categories.length === 0
+        ? baseFiltered
+        : baseFiltered.filter((r) => categories.includes(categoryOf(r.item.marketHashName)));
+    return sortRows(byCategory, sortKey, sortDir);
+  }, [baseFiltered, categories, sortKey, sortDir]);
+
+  const advActive = categories.length + (sortKey !== "default" ? 1 : 0);
+  const toggleCategory = (c: Category) =>
+    setCategories((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+  const resetAdv = () => {
+    setCategories([]);
+    setSortKey("default");
+    setSortDir("desc");
+  };
 
   const hasData = trades.length > 0 || listings.length > 0;
   const roi = summary.investedSoldCents > 0 ? (summary.realizedProfitCents / summary.investedSoldCents) * 100 : null;
@@ -405,6 +437,9 @@ export default function Home() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+            <button className={`tab ${showAdv || advActive > 0 ? "active" : ""}`} onClick={() => setShowAdv((v) => !v)}>
+              Bộ lọc nâng cao{advActive > 0 ? ` (${advActive})` : ""} {showAdv ? "▲" : "▼"}
+            </button>
             <label className="hint">
               Phí{" "}
               <input
@@ -429,6 +464,54 @@ export default function Home() {
               </select>
             </label>
           </div>
+
+          {showAdv && (
+            <section className="panel">
+              <div className="hint" style={{ marginBottom: 8 }}>
+                Loại vật phẩm (chọn nhiều loại; không chọn = tất cả)
+              </div>
+              <div className="tabs" style={{ flexWrap: "wrap" }}>
+                {CATEGORY_ORDER.map((c) => (
+                  <button
+                    key={c}
+                    className={`tab ${categories.includes(c) ? "active" : ""}`}
+                    onClick={() => toggleCategory(c)}
+                    disabled={categoryCounts[c] === 0 && !categories.includes(c)}
+                    style={categoryCounts[c] === 0 && !categories.includes(c) ? { opacity: 0.4, cursor: "default" } : undefined}
+                  >
+                    {CATEGORY_LABELS[c]} ({categoryCounts[c]})
+                  </button>
+                ))}
+              </div>
+
+              <div className="row-inline" style={{ marginTop: 14 }}>
+                <span className="hint">Sắp xếp theo</span>
+                <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}>
+                  {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                    <option key={k} value={k}>
+                      {SORT_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={sortDir}
+                  onChange={(e) => setSortDir(e.target.value as SortDir)}
+                  disabled={sortKey === "default"}
+                >
+                  <option value="desc">Giảm dần (cao/mới → thấp/cũ)</option>
+                  <option value="asc">Tăng dần (thấp/cũ → cao/mới)</option>
+                </select>
+                <button className="small ghost" onClick={resetAdv} disabled={advActive === 0}>
+                  Đặt lại
+                </button>
+              </div>
+              {sortKey !== "default" && (
+                <div className="hint" style={{ marginTop: 8 }}>
+                  Món không có dữ liệu cho tiêu chí này (ví dụ giá nhập tay không có ngày) luôn nằm cuối danh sách.
+                </div>
+              )}
+            </section>
+          )}
 
           {visible.length === 0 ? (
             <div className="empty">Không có món nào khớp bộ lọc.</div>
