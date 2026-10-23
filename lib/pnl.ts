@@ -15,7 +15,31 @@ export function netAfterFee(priceCents: number, feePct: number): number {
   return Math.round(priceCents * (1 - feePct / 100));
 }
 
-export function buildPnl(trades: NormTrade[], feePct = 2, listings: NormListing[] = []): PnlRow[] {
+/** Gán giá mua nhập tay (cent) cho một dòng "không rõ giá mua" rồi tính lại lãi/lỗ. */
+function applyManualBuy(row: PnlRow, cents: number): PnlRow {
+  const buy: NormTrade = {
+    tradeId: `manual-${row.key}`,
+    listingId: null,
+    role: "buyer",
+    priceCents: cents,
+    at: "",
+    item: row.item,
+  };
+  const net = row.netCents ?? 0;
+  const profit = net - cents;
+  const pct = cents > 0 ? (profit / cents) * 100 : null;
+  if (row.status === "sold_unknown_buy") {
+    return { ...row, status: "sold", buy, manualBuy: true, profitCents: profit, profitPct: pct };
+  }
+  return { ...row, status: "listed", buy, manualBuy: true, estProfitCents: profit, estProfitPct: pct };
+}
+
+export function buildPnl(
+  trades: NormTrade[],
+  feePct = 2,
+  listings: NormListing[] = [],
+  manualBuys: Record<string, number> = {},
+): PnlRow[] {
   const sorted = [...trades].sort((a, b) => a.at.localeCompare(b.at));
   const buys = new Map<string, NormTrade[]>();
   const sells = new Map<string, NormTrade[]>();
@@ -148,9 +172,18 @@ export function buildPnl(trades: NormTrade[], feePct = 2, listings: NormListing[
     }
   }
 
+  // Áp dụng giá mua nhập tay cho các dòng không rõ giá mua
+  const finalRows = rows.map((r) => {
+    const manual = manualBuys[r.key];
+    if ((r.status === "sold_unknown_buy" || r.status === "listed_unknown_buy") && manual != null) {
+      return applyManualBuy(r, manual);
+    }
+    return r;
+  });
+
   // Mới nhất lên đầu (theo lần giao dịch gần nhất của dòng đó)
-  rows.sort((a, b) => lastAt(b).localeCompare(lastAt(a)));
-  return rows;
+  finalRows.sort((a, b) => lastAt(b).localeCompare(lastAt(a)));
+  return finalRows;
 }
 
 function lastAt(r: PnlRow): string {

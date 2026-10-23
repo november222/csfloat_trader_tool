@@ -47,6 +47,8 @@ export interface PnlRow {
   /** Lãi/lỗ ước tính nếu bán đúng giá đang rao (chỉ cho món đang bán có giá mua) */
   estProfitCents: number | null;
   estProfitPct: number | null;
+  /** true nếu giá mua do người dùng nhập tay (không có lệnh mua trong lịch sử) */
+  manualBuy?: boolean;
 }
 
 export interface PnlSummary {

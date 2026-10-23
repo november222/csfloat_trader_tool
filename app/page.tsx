@@ -17,6 +17,7 @@ const FILTER_LABELS: Record<Filter, string> = {
 const LS_KEY = "csf_api_key";
 const LS_TRADES = "csf_trades_cache";
 const LS_SURVEYS = "csf_surveys_cache";
+const LS_MANUAL = "csf_manual_buys"; // giá mua nhập tay (cent) theo khoá của từng dòng
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
 
 function readLS<T>(k: string): T | null {
@@ -51,6 +52,7 @@ export default function Home() {
   const [tol, setTol] = useState(0.001);
   const [surveys, setSurveys] = useState<Record<string, SurveyState>>({});
   const [surveying, setSurveying] = useState<string | null>(null);
+  const [manualBuys, setManualBuys] = useState<Record<string, number>>({});
   const lastSurveyAt = useRef(0);
 
   // Nạp dữ liệu đã lưu trong trình duyệt khi mở trang
@@ -68,7 +70,20 @@ export default function Home() {
     }
     const s = readLS<Record<string, SurveyState>>(LS_SURVEYS);
     if (s) setSurveys(s);
+    const m = readLS<Record<string, number>>(LS_MANUAL);
+    if (m) setManualBuys(m);
   }, []);
+
+  /** Lưu hoặc xoá (cents = null) giá mua nhập tay của một dòng. */
+  const setManual = (key: string, cents: number | null) => {
+    setManualBuys((prev) => {
+      const next = { ...prev };
+      if (cents == null) delete next[key];
+      else next[key] = cents;
+      writeLS(LS_MANUAL, next);
+      return next;
+    });
+  };
 
   const headers = useCallback((): HeadersInit => (apiKey ? { "x-csfloat-key": apiKey } : {}), [apiKey]);
 
@@ -136,7 +151,7 @@ export default function Home() {
     }
   };
 
-  const rows = useMemo(() => buildPnl(trades, fee, listings), [trades, fee, listings]);
+  const rows = useMemo(() => buildPnl(trades, fee, listings, manualBuys), [trades, fee, listings, manualBuys]);
   const summary = useMemo(() => summarize(rows), [rows]);
 
   const visible = useMemo(() => {
@@ -289,6 +304,7 @@ export default function Home() {
                 busy={surveying === row.key}
                 disabled={surveying !== null}
                 onSurvey={() => survey(row)}
+                onManual={(cents) => setManual(row.key, cents)}
               />
             ))
           )}
@@ -309,6 +325,7 @@ function ItemCard({
   busy,
   disabled,
   onSurvey,
+  onManual,
 }: {
   row: PnlRow;
   fee: number;
@@ -316,7 +333,9 @@ function ItemCard({
   busy: boolean;
   disabled: boolean;
   onSurvey: () => void;
+  onManual: (cents: number | null) => void;
 }) {
+  const needsManual = row.status === "sold_unknown_buy" || row.status === "listed_unknown_buy";
   const img = imageUrl(row.item.iconUrl);
   const link = listingLink(row.listing?.listingId ?? row.sell?.listingId ?? row.buy?.listingId);
   const badge =
@@ -346,7 +365,10 @@ function ItemCard({
         </div>
 
         <div className="figures">
-          <Fig k={`Giá mua${row.buy ? ` · ${dateStr(row.buy.at)}` : ""}`} v={usd(row.buy?.priceCents)} />
+          <Fig
+            k={row.manualBuy ? "Giá mua (nhập tay)" : `Giá mua${row.buy ? ` · ${dateStr(row.buy.at)}` : ""}`}
+            v={usd(row.buy?.priceCents)}
+          />
           {row.listing ? (
             <>
               <Fig k={`Giá đang rao · ${dateStr(row.listing.at)}`} v={usd(row.listing.priceCents)} />
@@ -387,9 +409,59 @@ function ItemCard({
           )}
         </div>
 
+        {(needsManual || row.manualBuy) && (
+          <ManualBuyEditor
+            current={row.manualBuy ? row.buy?.priceCents ?? null : null}
+            onSave={onManual}
+          />
+        )}
+
         {survey && "error" in survey && <div className="error" style={{ marginTop: 10, marginBottom: 0 }}>{survey.error}</div>}
         {survey && !("error" in survey) && <SurveyBox survey={survey} row={row} fee={fee} />}
       </div>
+    </div>
+  );
+}
+
+/** Ô nhập giá mua (USD) cho món không có lệnh mua trong lịch sử. Lưu trong trình duyệt. */
+function ManualBuyEditor({ current, onSave }: { current: number | null; onSave: (cents: number | null) => void }) {
+  const [text, setText] = useState(current != null ? (current / 100).toFixed(2) : "");
+  const parsed = Number(text.replace(",", "."));
+  const valid = text.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
+
+  const save = () => {
+    if (valid) onSave(Math.round(parsed * 100));
+  };
+
+  return (
+    <div className="row-inline" style={{ marginTop: 10 }}>
+      <span className="hint">{current != null ? "Sửa giá mua (USD):" : "Nhập giá mua (USD):"}</span>
+      <input
+        className="small"
+        style={{ width: 100 }}
+        type="text"
+        inputMode="decimal"
+        placeholder="0.00"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+        }}
+      />
+      <button className="small" onClick={save} disabled={!valid || (current != null && Math.round(parsed * 100) === current)}>
+        Lưu
+      </button>
+      {current != null && (
+        <button
+          className="small ghost"
+          onClick={() => {
+            onSave(null);
+            setText("");
+          }}
+        >
+          Xoá
+        </button>
+      )}
     </div>
   );
 }

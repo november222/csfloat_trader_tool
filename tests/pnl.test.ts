@@ -112,3 +112,34 @@ test("listing không có lệnh mua tương ứng được đánh dấu không r
   assert.equal(rows[0].status, "listed_unknown_buy");
   assert.equal(summarize(rows).unknownBuyCount, 1);
 });
+
+test("giá mua nhập tay biến 'bán không rõ giá mua' thành 'đã bán' có lãi/lỗ", () => {
+  const sell = trade("9", "seller", 10000, "2026-02-01T00:00:00Z", 0.55);
+  const before = buildPnl([sell], 2);
+  assert.equal(before[0].status, "sold_unknown_buy");
+  const key = before[0].key;
+
+  const after = buildPnl([sell], 2, [], { [key]: 8000 });
+  assert.equal(after[0].status, "sold");
+  assert.equal(after[0].manualBuy, true);
+  assert.equal(after[0].profitCents, Math.round(10000 * 0.98) - 8000);
+  const s = summarize(after);
+  assert.equal(s.soldCount, 1);
+  assert.equal(s.unknownBuyCount, 0);
+  assert.equal(s.realizedProfitCents, 1800);
+});
+
+test("giá mua nhập tay cho món đang rao không rõ giá mua tính lãi/lỗ ước tính", () => {
+  const listing = {
+    listingId: "LIVE3",
+    priceCents: 20000,
+    at: "2026-02-01T00:00:00Z",
+    type: "buy_now",
+    item: item(0.91),
+  };
+  const key = buildPnl([], 2, [listing])[0].key;
+  const rows = buildPnl([], 2, [listing], { [key]: 15000 });
+  assert.equal(rows[0].status, "listed");
+  assert.equal(rows[0].estProfitCents, Math.round(20000 * 0.98) - 15000);
+  assert.equal(summarize(rows).listedCostCents, 15000);
+});
