@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
+import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
 import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 
@@ -18,6 +18,7 @@ const LS_KEY = "csf_api_key";
 const LS_TRADES = "csf_trades_cache";
 const LS_SURVEYS = "csf_surveys_cache";
 const LS_MANUAL = "csf_manual_buys"; // giá mua nhập tay (cent) theo khoá của từng dòng
+const LS_MANUAL_SELL = "csf_manual_sells"; // giá bán nhập tay (bán ở sàn khác) theo khoá của từng dòng
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
 const PART_GAP_MS = 2000; // nghỉ giữa các phần khi tải (lịch sử mua → bán → stall)
 
@@ -86,6 +87,7 @@ export default function Home() {
   const [surveys, setSurveys] = useState<Record<string, SurveyState>>({});
   const [surveying, setSurveying] = useState<string | null>(null);
   const [manualBuys, setManualBuys] = useState<Record<string, number>>({});
+  const [manualSells, setManualSells] = useState<Record<string, ManualSell>>({});
   const lastSurveyAt = useRef(0);
 
   // Nạp dữ liệu đã lưu trong trình duyệt khi mở trang
@@ -113,7 +115,20 @@ export default function Home() {
     if (s) setSurveys(s);
     const m = readLS<Record<string, number>>(LS_MANUAL);
     if (m) setManualBuys(m);
+    const ms = readLS<Record<string, ManualSell>>(LS_MANUAL_SELL);
+    if (ms) setManualSells(ms);
   }, []);
+
+  /** Lưu hoặc xoá (ms = null) giá bán nhập tay (bán ở sàn khác) của một dòng. */
+  const setManualSell = (key: string, ms: ManualSell | null) => {
+    setManualSells((prev) => {
+      const next = { ...prev };
+      if (ms == null) delete next[key];
+      else next[key] = ms;
+      writeLS(LS_MANUAL_SELL, next);
+      return next;
+    });
+  };
 
   // Lưu dữ liệu đã tải vào trình duyệt (bỏ qua lần render đầu, trước khi nạp xong dữ liệu cũ)
   useEffect(() => {
@@ -240,7 +255,10 @@ export default function Home() {
     }
   };
 
-  const rows = useMemo(() => buildPnl(trades, fee, listings, manualBuys), [trades, fee, listings, manualBuys]);
+  const rows = useMemo(
+    () => buildPnl(trades, fee, listings, manualBuys, manualSells),
+    [trades, fee, listings, manualBuys, manualSells],
+  );
   const summary = useMemo(() => summarize(rows), [rows]);
 
   const visible = useMemo(() => {
@@ -425,6 +443,7 @@ export default function Home() {
                 disabled={surveying !== null || cooldown > 0 || loading}
                 onSurvey={() => survey(row)}
                 onManual={(cents) => setManual(row.key, cents)}
+                onManualSell={(ms) => setManualSell(row.key, ms)}
               />
             ))
           )}
@@ -446,6 +465,7 @@ function ItemCard({
   disabled,
   onSurvey,
   onManual,
+  onManualSell,
 }: {
   row: PnlRow;
   fee: number;
@@ -454,8 +474,15 @@ function ItemCard({
   disabled: boolean;
   onSurvey: () => void;
   onManual: (cents: number | null) => void;
+  onManualSell: (ms: ManualSell | null) => void;
 }) {
   const needsManual = row.status === "sold_unknown_buy" || row.status === "listed_unknown_buy";
+  // Cho phép nhập giá bán ở sàn khác với món đã biết giá mua mà chưa bán trên CSFloat (hoặc đã nhập tay trước đó)
+  const canManualSell = ((row.status === "holding" || row.status === "listed") && row.buy != null) || !!row.manualSell;
+  const currentManualSell: ManualSell | null =
+    row.manualSell && row.sell
+      ? { priceCents: row.sell.priceCents, feePct: row.sellFeePct ?? fee, platform: row.sellPlatform ?? null }
+      : null;
   const img = imageUrl(row.item.iconUrl);
   const link = listingLink(row.listing?.listingId ?? row.sell?.listingId ?? row.buy?.listingId);
   const badge =
@@ -504,8 +531,15 @@ function ItemCard({
             </>
           ) : (
             <>
-              <Fig k={`Giá bán${row.sell ? ` · ${dateStr(row.sell.at)}` : ""}`} v={usd(row.sell?.priceCents)} />
-              {row.sell && <Fig k={`Thực nhận (−${fee}%)`} v={usd(row.netCents)} />}
+              <Fig
+                k={
+                  row.manualSell
+                    ? `Giá bán (nhập tay${row.sellPlatform ? ` · ${row.sellPlatform}` : ""})`
+                    : `Giá bán${row.sell ? ` · ${dateStr(row.sell.at)}` : ""}`
+                }
+                v={usd(row.sell?.priceCents)}
+              />
+              {row.sell && <Fig k={`Thực nhận (−${row.sellFeePct ?? fee}%)`} v={usd(row.netCents)} />}
             </>
           )}
           {row.status === "sold" && (
@@ -535,6 +569,8 @@ function ItemCard({
             onSave={onManual}
           />
         )}
+
+        {canManualSell && <ManualSellEditor current={currentManualSell} defaultFee={fee} onSave={onManualSell} />}
 
         {survey && "error" in survey && <div className="error" style={{ marginTop: 10, marginBottom: 0 }}>{survey.error}</div>}
         {survey && !("error" in survey) && <SurveyBox survey={survey} row={row} fee={fee} />}
@@ -580,6 +616,95 @@ function ManualBuyEditor({ current, onSave }: { current: number | null; onSave: 
           }}
         >
           Xoá
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Nhập giá bán cho món mua trên CSFloat nhưng bán ở sàn khác (kèm tên sàn và phí riêng). Lưu trong trình duyệt. */
+function ManualSellEditor({
+  current,
+  defaultFee,
+  onSave,
+}: {
+  current: ManualSell | null;
+  defaultFee: number;
+  onSave: (ms: ManualSell | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [price, setPrice] = useState(current ? (current.priceCents / 100).toFixed(2) : "");
+  const [platform, setPlatform] = useState(current?.platform ?? "");
+  const [feeText, setFeeText] = useState(String(current?.feePct ?? defaultFee));
+
+  const priceNum = Number(price.replace(",", "."));
+  const feeNum = Number(feeText.replace(",", "."));
+  const valid =
+    price.trim() !== "" && Number.isFinite(priceNum) && priceNum > 0 && Number.isFinite(feeNum) && feeNum >= 0 && feeNum < 100;
+
+  if (!current && !open) {
+    return (
+      <div style={{ marginTop: 10 }}>
+        <button className="small ghost" onClick={() => setOpen(true)}>
+          Đã bán ở sàn khác?
+        </button>
+      </div>
+    );
+  }
+
+  const save = () => {
+    if (!valid) return;
+    onSave({ priceCents: Math.round(priceNum * 100), feePct: feeNum, platform: platform.trim() || null });
+  };
+
+  return (
+    <div className="row-inline" style={{ marginTop: 10 }}>
+      <span className="hint">Bán ở sàn khác:</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        placeholder="Giá bán (USD)"
+        style={{ width: 120 }}
+        value={price}
+        onChange={(e) => setPrice(e.target.value)}
+      />
+      <input
+        type="text"
+        placeholder="Tên sàn (tuỳ chọn)"
+        style={{ width: 150 }}
+        value={platform}
+        onChange={(e) => setPlatform(e.target.value)}
+      />
+      <label className="hint">
+        Phí{" "}
+        <input
+          type="text"
+          inputMode="decimal"
+          style={{ width: 56 }}
+          value={feeText}
+          onChange={(e) => setFeeText(e.target.value)}
+        />{" "}
+        %
+      </label>
+      <button className="small" onClick={save} disabled={!valid}>
+        Lưu
+      </button>
+      {current ? (
+        <button
+          className="small ghost"
+          onClick={() => {
+            onSave(null);
+            setPrice("");
+            setPlatform("");
+            setFeeText(String(defaultFee));
+            setOpen(false);
+          }}
+        >
+          Xoá
+        </button>
+      ) : (
+        <button className="small ghost" onClick={() => setOpen(false)}>
+          Huỷ
         </button>
       )}
     </div>

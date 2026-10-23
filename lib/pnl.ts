@@ -1,4 +1,4 @@
-import type { NormListing, NormTrade, PnlRow, PnlSummary, TradeItem } from "./types";
+import type { ManualSell, NormListing, NormTrade, PnlRow, PnlSummary, TradeItem } from "./types";
 
 function keyOf(item: TradeItem): string {
   const f = item.floatValue == null ? "nofloat" : item.floatValue.toFixed(12);
@@ -34,11 +34,41 @@ function applyManualBuy(row: PnlRow, cents: number): PnlRow {
   return { ...row, status: "listed", buy, manualBuy: true, estProfitCents: profit, estProfitPct: pct };
 }
 
+/** Món mua trên CSFloat nhưng bán ở sàn khác: dùng giá bán và phí nhập tay để tính lãi/lỗ đã chốt. */
+function applyManualSell(row: PnlRow, ms: ManualSell): PnlRow {
+  const buyCents = row.buy?.priceCents ?? 0;
+  const net = netAfterFee(ms.priceCents, ms.feePct);
+  const profit = net - buyCents;
+  const sell: NormTrade = {
+    tradeId: `manual-sell-${row.key}`,
+    listingId: null,
+    role: "seller",
+    priceCents: ms.priceCents,
+    at: "",
+    item: row.item,
+  };
+  return {
+    ...row,
+    status: "sold",
+    sell,
+    listing: null,
+    netCents: net,
+    profitCents: profit,
+    profitPct: buyCents > 0 ? (profit / buyCents) * 100 : null,
+    estProfitCents: null,
+    estProfitPct: null,
+    manualSell: true,
+    sellPlatform: ms.platform,
+    sellFeePct: ms.feePct,
+  };
+}
+
 export function buildPnl(
   trades: NormTrade[],
   feePct = 2,
   listings: NormListing[] = [],
   manualBuys: Record<string, number> = {},
+  manualSells: Record<string, ManualSell> = {},
 ): PnlRow[] {
   const sorted = [...trades].sort((a, b) => a.at.localeCompare(b.at));
   const buys = new Map<string, NormTrade[]>();
@@ -175,10 +205,16 @@ export function buildPnl(
   // Áp dụng giá mua nhập tay cho các dòng không rõ giá mua
   const finalRows = rows.map((r) => {
     const manual = manualBuys[r.key];
-    if ((r.status === "sold_unknown_buy" || r.status === "listed_unknown_buy") && manual != null) {
-      return applyManualBuy(r, manual);
+    let row = r;
+    if ((row.status === "sold_unknown_buy" || row.status === "listed_unknown_buy") && manual != null) {
+      row = applyManualBuy(row, manual);
     }
-    return r;
+    // Giá bán nhập tay chỉ áp dụng cho món đã biết giá mua và chưa bán trên CSFloat (đang giữ hoặc đang rao).
+    const ms = manualSells[row.key];
+    if (ms && row.buy && (row.status === "holding" || row.status === "listed")) {
+      row = applyManualSell(row, ms);
+    }
+    return row;
   });
 
   // Mới nhất lên đầu (theo lần giao dịch gần nhất của dòng đó)

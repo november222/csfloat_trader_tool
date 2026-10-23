@@ -143,3 +143,48 @@ test("giá mua nhập tay cho món đang rao không rõ giá mua tính lãi/lỗ
   assert.equal(rows[0].estProfitCents, Math.round(20000 * 0.98) - 15000);
   assert.equal(summarize(rows).listedCostCents, 15000);
 });
+
+test("món mua trên CSFloat, bán ở sàn khác: dùng giá bán và phí nhập tay", () => {
+  const buy = trade("1", "buyer", 10000, "2026-01-01T00:00:00Z");
+  const before = buildPnl([buy], 2);
+  assert.equal(before[0].status, "holding");
+  const key = before[0].key;
+
+  const after = buildPnl([buy], 2, [], {}, { [key]: { priceCents: 13000, feePct: 5, platform: "Buff" } });
+  assert.equal(after.length, 1);
+  assert.equal(after[0].status, "sold");
+  assert.equal(after[0].manualSell, true);
+  assert.equal(after[0].sellPlatform, "Buff");
+  assert.equal(after[0].netCents, Math.round(13000 * 0.95));
+  assert.equal(after[0].profitCents, Math.round(13000 * 0.95) - 10000);
+  const s = summarize(after);
+  assert.equal(s.soldCount, 1);
+  assert.equal(s.holdingCount, 0);
+});
+
+test("giá bán nhập tay áp dụng được cho món đang rao trong stall", () => {
+  const buy = trade("1", "buyer", 10000, "2026-01-01T00:00:00Z");
+  const listing = { listingId: "L9", priceCents: 15000, at: "2026-01-02T00:00:00Z", type: "buy_now", item: item(0.2) };
+  const key = buildPnl([buy], 2, [listing])[0].key;
+  const rows = buildPnl([buy], 2, [listing], {}, { [key]: { priceCents: 14000, feePct: 2, platform: null } });
+  assert.equal(rows[0].status, "sold");
+  assert.equal(rows[0].listing, null);
+  assert.equal(summarize(rows).listedCount, 0);
+});
+
+test("món mua không rõ giá mua nhưng đã nhập giá mua tay rồi nhập giá bán tay", () => {
+  const sellTrade = trade("5", "seller", 9000, "2026-03-01T00:00:00Z", 0.4);
+  // món đang rao nhưng không có lệnh mua
+  const listing = { listingId: "L7", priceCents: 9000, at: "2026-03-01T00:00:00Z", type: "buy_now", item: item(0.66) };
+  const key = buildPnl([], 2, [listing])[0].key;
+  const rows = buildPnl(
+    [sellTrade],
+    2,
+    [listing],
+    { [key]: 5000 },
+    { [key]: { priceCents: 8000, feePct: 2, platform: "Steam" } },
+  );
+  const manual = rows.find((r) => r.manualSell);
+  assert.ok(manual);
+  assert.equal(manual?.profitCents, Math.round(8000 * 0.98) - 5000);
+});

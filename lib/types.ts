@@ -49,6 +49,19 @@ export interface PnlRow {
   estProfitPct: number | null;
   /** true nếu giá mua do người dùng nhập tay (không có lệnh mua trong lịch sử) */
   manualBuy?: boolean;
+  /** true nếu giá bán do người dùng nhập tay (bán ở sàn khác ngoài CSFloat) */
+  manualSell?: boolean;
+  /** Tên sàn khi bán ở nơi khác (nhập tay), nếu có */
+  sellPlatform?: string | null;
+  /** Phí % đã dùng để tính số tiền thực nhận của dòng này (phí riêng nếu bán ở sàn khác) */
+  sellFeePct?: number;
+}
+
+/** Giá bán nhập tay cho món mua trên CSFloat nhưng bán ở sàn khác. */
+export interface ManualSell {
+  priceCents: number;
+  feePct: number;
+  platform: string | null;
 }
 
 export interface PnlSummary {
