@@ -46,5 +46,7 @@ Có thể thêm biến môi trường `CSFLOAT_API_KEY` trong Vercel (Settings �
 
 - Docs chính thức của CSFloat không mô tả endpoint `/me/trades` và `/me`; tool dùng endpoint này theo các thư viện cộng đồng. Nếu CSFloat đổi cấu trúc dữ liệu, chỉnh hàm `normTrade` trong `lib/csfloat.ts`.
 - Chống lỗi 429 (giới hạn tốc độ): trình duyệt tải từng phần một (lịch sử mua → lịch sử bán → stall), nghỉ vài giây giữa các phần; server nghỉ 1,5 giây giữa các trang và tự thử lại vài lần nếu CSFloat bảo đợi ngắn. Nếu vẫn bị 429, trang dừng ngay, giữ nguyên dữ liệu đã tải và đếm ngược trước khi cho bấm lại. Có nút "Chỉ làm mới stall" để không phải tải lại toàn bộ lịch sử.
+- Khi CSFloat trả lỗi (429, 401/403...), trang hiện thêm mục **Chi tiết kỹ thuật** (endpoint nào, header giới hạn tốc độ, đoạn đầu nội dung phản hồi; không chứa API key) để biết lỗi đến từ API hay từ lớp chống bot.
+- Phân trang có chốt chặn: dừng ngay nếu một trang không có dữ liệu mới, và stall chỉ nhận listing có người bán đúng là bạn.
 - Giá của CSFloat tính bằng cent USD.
 - Asset ID của món đồ đổi sau mỗi lần trade trên Steam, nên việc ghép mua-bán dựa trên tên + float + pattern seed.

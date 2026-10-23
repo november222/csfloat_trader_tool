@@ -28,15 +28,21 @@ const PART_LABEL: Record<Part, string> = {
   stall: "stall (món đang bán)",
 };
 
+type ErrorDetail = { endpoint: string; attempts: number; headers: Record<string, string>; body: string };
+
 class ApiError extends Error {
   status: number;
   retryAfter: number | null;
-  constructor(message: string, status: number, retryAfter: number | null) {
+  detail: ErrorDetail | null;
+  constructor(message: string, status: number, retryAfter: number | null, detail: ErrorDetail | null = null) {
     super(message);
     this.status = status;
     this.retryAfter = retryAfter;
+    this.detail = detail;
   }
 }
+
+type PartError = { message: string; detail: ErrorDetail | null };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -67,7 +73,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [partErrors, setPartErrors] = useState<Partial<Record<Part, string>>>({});
+  const [partErrors, setPartErrors] = useState<Partial<Record<Part, PartError>>>({});
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const hydrated = useRef(false);
@@ -163,7 +169,7 @@ export default function Home() {
     const res = await fetch(url, { headers: headers() });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new ApiError(data?.error ?? `Lỗi ${res.status}`, res.status, data?.retryAfter ?? null);
+      throw new ApiError(data?.error ?? `Lỗi ${res.status}`, res.status, data?.retryAfter ?? null, data?.detail ?? null);
     }
     return data;
   };
@@ -188,7 +194,10 @@ export default function Home() {
         setPartErrors((prev) => ({ ...prev, [part]: undefined }));
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Tải dữ liệu thất bại.";
-        setPartErrors((prev) => ({ ...prev, [part]: msg }));
+        setPartErrors((prev) => ({
+          ...prev,
+          [part]: { message: msg, detail: e instanceof ApiError ? e.detail : null },
+        }));
         if (e instanceof ApiError && e.status === 429) {
           setCooldownUntil(Date.now() + (e.retryAfter ?? 60) * 1000);
           break; // dừng, không gửi thêm request khi đang bị giới hạn
@@ -307,9 +316,17 @@ export default function Home() {
       {(Object.keys(PART_LABEL) as Part[]).map((p) =>
         partErrors[p] ? (
           <div className="error" key={p}>
-            Không tải được {PART_LABEL[p]}: {partErrors[p]}
+            Không tải được {PART_LABEL[p]}: {partErrors[p]?.message}
             {cooldown > 0 ? ` (tự mở lại nút sau ${cooldown}s)` : ""}
             {hasData ? " Dữ liệu đã tải trước đó vẫn được giữ nguyên." : ""}
+            {partErrors[p]?.detail && (
+              <details style={{ marginTop: 6 }}>
+                <summary style={{ cursor: "pointer" }}>Chi tiết kỹ thuật (gửi cho người hỗ trợ nếu cần)</summary>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 12, margin: "6px 0 0" }}>
+                  {JSON.stringify(partErrors[p]?.detail, null, 2)}
+                </pre>
+              </details>
+            )}
           </div>
         ) : null,
       )}
