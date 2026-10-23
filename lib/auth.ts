@@ -11,7 +11,8 @@ export function resolveKey(req: Request): string | null {
 
 export function errorResponse(e: unknown) {
   if (e instanceof CsfloatError) {
-    return NextResponse.json({ error: e.message }, { status: e.status === 429 ? 429 : e.status >= 400 ? e.status : 502 });
+    const status = e.status === 429 ? 429 : e.status >= 400 ? e.status : 502;
+    return NextResponse.json({ error: e.message, retryAfter: e.retryAfter ?? null }, { status });
   }
   return NextResponse.json({ error: "Lỗi không xác định ở server." }, { status: 500 });
 }

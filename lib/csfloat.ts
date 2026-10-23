@@ -4,30 +4,56 @@ export const CSFLOAT_BASE = "https://csfloat.com/api/v1";
 
 export class CsfloatError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Số giây nên đợi trước khi thử lại (chỉ có với lỗi 429) */
+  retryAfter?: number;
+  constructor(status: number, message: string, retryAfter?: number) {
     super(message);
     this.status = status;
+    this.retryAfter = retryAfter;
   }
-}
-
-export async function csfloatGet(path: string, apiKey: string): Promise<unknown> {
-  const res = await fetch(`${CSFLOAT_BASE}${path}`, {
-    headers: { Authorization: apiKey, Accept: "application/json" },
-    cache: "no-store",
-  });
-  if (res.status === 429) {
-    throw new CsfloatError(429, "CSFloat đang giới hạn tốc độ (429). Hãy đợi một lúc rồi thử lại.");
-  }
-  if (res.status === 401 || res.status === 403) {
-    throw new CsfloatError(res.status, "API key không hợp lệ hoặc không đủ quyền.");
-  }
-  if (!res.ok) {
-    throw new CsfloatError(res.status, `CSFloat trả về lỗi ${res.status}.`);
-  }
-  return res.json();
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Khoảng nghỉ giữa các request liên tiếp tới CSFloat khi phân trang. */
+const PAGE_GAP_MS = 1500;
+const MAX_RETRIES_429 = 2;
+const MAX_INLINE_WAIT_S = 8; // chỉ tự đợi tại server nếu CSFloat bảo đợi ngắn
+
+export async function csfloatGet(path: string, apiKey: string): Promise<unknown> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${CSFLOAT_BASE}${path}`, {
+      headers: {
+        Authorization: apiKey,
+        Accept: "application/json",
+        "User-Agent": "csfloat-trader-tool/1.0",
+      },
+      cache: "no-store",
+    });
+    if (res.status === 429) {
+      const ra = Number(res.headers.get("retry-after"));
+      const retryAfter = Number.isFinite(ra) && ra > 0 ? Math.ceil(ra) : null;
+      const waitS = retryAfter ?? 2 * (attempt + 1);
+      // Tự đợi rồi thử lại vài lần nếu thời gian đợi ngắn; nếu không thì báo về trình duyệt kèm số giây cần đợi.
+      if (attempt < MAX_RETRIES_429 && waitS <= MAX_INLINE_WAIT_S) {
+        await sleep(waitS * 1000);
+        continue;
+      }
+      throw new CsfloatError(
+        429,
+        "CSFloat đang giới hạn tốc độ (429). Hãy đợi một lúc rồi thử lại.",
+        retryAfter ?? 60,
+      );
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new CsfloatError(res.status, "API key không hợp lệ hoặc không đủ quyền.");
+    }
+    if (!res.ok) {
+      throw new CsfloatError(res.status, `CSFloat trả về lỗi ${res.status}.`);
+    }
+    return res.json();
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -72,7 +98,7 @@ export async function fetchTrades(apiKey: string, role: Role, maxPages = 20): Pr
       if (t) out.push(t);
     }
     if (list.length < limit) break;
-    await sleep(400);
+    await sleep(PAGE_GAP_MS);
   }
   return out;
 }
@@ -115,7 +141,7 @@ export async function fetchMyListings(apiKey: string, steamId: string, maxPages 
       if (l) out.push(l);
     }
     if (list.length < limit) break;
-    await sleep(400);
+    await sleep(PAGE_GAP_MS);
   }
   return out;
 }

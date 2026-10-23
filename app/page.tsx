@@ -19,6 +19,26 @@ const LS_TRADES = "csf_trades_cache";
 const LS_SURVEYS = "csf_surveys_cache";
 const LS_MANUAL = "csf_manual_buys"; // giá mua nhập tay (cent) theo khoá của từng dòng
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
+const PART_GAP_MS = 2000; // nghỉ giữa các phần khi tải (lịch sử mua → bán → stall)
+
+type Part = "buyer" | "seller" | "stall";
+const PART_LABEL: Record<Part, string> = {
+  buyer: "lịch sử mua",
+  seller: "lịch sử bán",
+  stall: "stall (món đang bán)",
+};
+
+class ApiError extends Error {
+  status: number;
+  retryAfter: number | null;
+  constructor(message: string, status: number, retryAfter: number | null) {
+    super(message);
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function readLS<T>(k: string): T | null {
   try {
@@ -40,12 +60,19 @@ function writeLS(k: string, v: unknown) {
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
   const [keyInput, setKeyInput] = useState("");
-  const [trades, setTrades] = useState<NormTrade[]>([]);
+  const [buys, setBuys] = useState<NormTrade[]>([]);
+  const [sells, setSells] = useState<NormTrade[]>([]);
   const [listings, setListings] = useState<NormListing[]>([]);
-  const [stallError, setStallError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [partErrors, setPartErrors] = useState<Partial<Record<Part, string>>>({});
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const hydrated = useRef(false);
+  const trades = useMemo(() => [...buys, ...sells], [buys, sells]);
+  const cooldown = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
   const [fee, setFee] = useState(2);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -62,17 +89,46 @@ export default function Home() {
       setApiKey(k);
       setKeyInput(k);
     }
-    const cached = readLS<{ trades: NormTrade[]; listings?: NormListing[]; fetchedAt: string }>(LS_TRADES);
+    const cached = readLS<{
+      buys?: NormTrade[];
+      sells?: NormTrade[];
+      trades?: NormTrade[]; // định dạng cũ
+      listings?: NormListing[];
+      fetchedAt?: string | null;
+    }>(LS_TRADES);
     if (cached) {
-      setTrades(cached.trades);
+      const all = cached.trades ?? [];
+      setBuys(cached.buys ?? all.filter((t) => t.role === "buyer"));
+      setSells(cached.sells ?? all.filter((t) => t.role === "seller"));
       setListings(cached.listings ?? []);
-      setFetchedAt(cached.fetchedAt);
+      setFetchedAt(cached.fetchedAt ?? null);
     }
     const s = readLS<Record<string, SurveyState>>(LS_SURVEYS);
     if (s) setSurveys(s);
     const m = readLS<Record<string, number>>(LS_MANUAL);
     if (m) setManualBuys(m);
   }, []);
+
+  // Lưu dữ liệu đã tải vào trình duyệt (bỏ qua lần render đầu, trước khi nạp xong dữ liệu cũ)
+  useEffect(() => {
+    if (!hydrated.current) return;
+    writeLS(LS_TRADES, { buys, sells, listings, fetchedAt });
+  }, [buys, sells, listings, fetchedAt]);
+  useEffect(() => {
+    hydrated.current = true;
+  }, []);
+
+  // Đếm ngược khi CSFloat yêu cầu đợi (429)
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return;
+    setNow(Date.now());
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= cooldownUntil) clearInterval(id);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
 
   /** Lưu hoặc xoá (cents = null) giá mua nhập tay của một dòng. */
   const setManual = (key: string, cents: number | null) => {
@@ -103,28 +159,51 @@ export default function Home() {
     }
   };
 
-  const loadTrades = async () => {
+  const callApi = async (url: string) => {
+    const res = await fetch(url, { headers: headers() });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new ApiError(data?.error ?? `Lỗi ${res.status}`, res.status, data?.retryAfter ?? null);
+    }
+    return data;
+  };
+
+  /** Tải từng phần một (không gửi song song), nghỉ giữa các phần. Gặp 429 thì dừng ngay và đếm ngược. */
+  const loadParts = async (parts: Part[]) => {
     setLoading(true);
     setError(null);
-    try {
-      const res = await fetch("/api/trades", { headers: headers() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? `Lỗi ${res.status}`);
-      setTrades(data.trades);
-      setListings(data.listings ?? []);
-      setStallError(data.stallError ?? null);
-      setFetchedAt(data.fetchedAt);
-      writeLS(LS_TRADES, { trades: data.trades, listings: data.listings ?? [], fetchedAt: data.fetchedAt });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Không tải được giao dịch.");
-    } finally {
-      setLoading(false);
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      setProgress(`Đang tải ${PART_LABEL[part]} (${i + 1}/${parts.length})…`);
+      try {
+        if (part === "stall") {
+          const d = await callApi("/api/stall");
+          setListings(d.listings ?? []);
+        } else {
+          const d = await callApi(`/api/trades?role=${part}`);
+          if (part === "buyer") setBuys(d.trades ?? []);
+          else setSells(d.trades ?? []);
+        }
+        setFetchedAt(new Date().toISOString());
+        setPartErrors((prev) => ({ ...prev, [part]: undefined }));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Tải dữ liệu thất bại.";
+        setPartErrors((prev) => ({ ...prev, [part]: msg }));
+        if (e instanceof ApiError && e.status === 429) {
+          setCooldownUntil(Date.now() + (e.retryAfter ?? 60) * 1000);
+          break; // dừng, không gửi thêm request khi đang bị giới hạn
+        }
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) break;
+      }
+      if (i < parts.length - 1) await sleep(PART_GAP_MS);
     }
+    setProgress(null);
+    setLoading(false);
   };
 
   const survey = async (row: PnlRow) => {
     const float = row.item.floatValue;
-    if (float == null || surveying) return;
+    if (float == null || surveying || cooldown > 0) return;
     const wait = lastSurveyAt.current + SURVEY_GAP_MS - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     setSurveying(row.key);
@@ -134,15 +213,16 @@ export default function Home() {
         float: String(float),
         tol: String(tol),
       });
-      const res = await fetch(`/api/survey?${q.toString()}`, { headers: headers() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? `Lỗi ${res.status}`);
+      const data = await callApi(`/api/survey?${q.toString()}`);
       setSurveys((prev) => {
         const next = { ...prev, [row.key]: data as SurveyResult };
         writeLS(LS_SURVEYS, next);
         return next;
       });
     } catch (e) {
+      if (e instanceof ApiError && e.status === 429) {
+        setCooldownUntil(Date.now() + (e.retryAfter ?? 60) * 1000);
+      }
       const msg = e instanceof Error ? e.message : "Khảo giá thất bại.";
       setSurveys((prev) => ({ ...prev, [row.key]: { error: msg } }));
     } finally {
@@ -196,19 +276,42 @@ export default function Home() {
               Xoá key
             </button>
           )}
-          <button onClick={loadTrades} disabled={loading}>
-            {loading ? "Đang tải…" : hasData ? "Làm mới dữ liệu" : "Tải giao dịch & stall"}
+          <button onClick={() => loadParts(["buyer", "seller", "stall"])} disabled={loading || cooldown > 0}>
+            {loading
+              ? "Đang tải…"
+              : cooldown > 0
+                ? `Thử lại sau ${cooldown}s`
+                : hasData
+                  ? "Làm mới tất cả"
+                  : "Tải giao dịch & stall"}
           </button>
+          {hasData && (
+            <button className="ghost" onClick={() => loadParts(["stall"])} disabled={loading || cooldown > 0}>
+              Chỉ làm mới stall
+            </button>
+          )}
         </div>
+        {progress && (
+          <div className="hint" style={{ marginTop: 8 }}>
+            {progress}
+          </div>
+        )}
         <div className="hint" style={{ marginTop: 8 }}>
-          Key được lưu trong trình duyệt của bạn và chỉ gửi qua server của trang này tới CSFloat. Dữ liệu giao dịch được
-          lưu tạm trong trình duyệt để không phải tải lại mỗi lần.
+          Key được lưu trong trình duyệt của bạn và chỉ gửi qua server của trang này tới CSFloat. Dữ liệu đã tải được
+          lưu tạm trong trình duyệt nên không cần tải lại mỗi lần mở trang; chỉ làm mới khi cần để tránh bị CSFloat giới
+          hạn tốc độ.
         </div>
       </section>
 
       {error && <div className="error">{error}</div>}
-      {stallError && (
-        <div className="error">Đã tải giao dịch nhưng không lấy được món đang bán trong stall: {stallError}</div>
+      {(Object.keys(PART_LABEL) as Part[]).map((p) =>
+        partErrors[p] ? (
+          <div className="error" key={p}>
+            Không tải được {PART_LABEL[p]}: {partErrors[p]}
+            {cooldown > 0 ? ` (tự mở lại nút sau ${cooldown}s)` : ""}
+            {hasData ? " Dữ liệu đã tải trước đó vẫn được giữ nguyên." : ""}
+          </div>
+        ) : null,
       )}
 
       {hasData && (
@@ -302,7 +405,7 @@ export default function Home() {
                 fee={fee}
                 survey={surveys[row.key]}
                 busy={surveying === row.key}
-                disabled={surveying !== null}
+                disabled={surveying !== null || cooldown > 0 || loading}
                 onSurvey={() => survey(row)}
                 onManual={(cents) => setManual(row.key, cents)}
               />

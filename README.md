@@ -15,7 +15,7 @@ Trang web theo dõi các món đồ CS2 bạn đã **mua / bán** trên CSFloat,
 
 ## Công nghệ
 
-Next.js 14 (App Router) + TypeScript. Các route `/api/trades` và `/api/survey` đóng vai trò proxy phía server tới CSFloat (tránh lỗi CORS), nên deploy lên Vercel không cần cấu hình thêm.
+Next.js 14 (App Router) + TypeScript. Các route `/api/trades`, `/api/stall` và `/api/survey` đóng vai trò proxy phía server tới CSFloat (tránh lỗi CORS), nên deploy lên Vercel không cần cấu hình thêm.
 
 ## Chạy local
 
@@ -45,5 +45,6 @@ Có thể thêm biến môi trường `CSFLOAT_API_KEY` trong Vercel (Settings �
 ## Lưu ý
 
 - Docs chính thức của CSFloat không mô tả endpoint `/me/trades` và `/me`; tool dùng endpoint này theo các thư viện cộng đồng. Nếu CSFloat đổi cấu trúc dữ liệu, chỉnh hàm `normTrade` trong `lib/csfloat.ts`.
+- Chống lỗi 429 (giới hạn tốc độ): trình duyệt tải từng phần một (lịch sử mua → lịch sử bán → stall), nghỉ vài giây giữa các phần; server nghỉ 1,5 giây giữa các trang và tự thử lại vài lần nếu CSFloat bảo đợi ngắn. Nếu vẫn bị 429, trang dừng ngay, giữ nguyên dữ liệu đã tải và đếm ngược trước khi cho bấm lại. Có nút "Chỉ làm mới stall" để không phải tải lại toàn bộ lịch sử.
 - Giá của CSFloat tính bằng cent USD.
 - Asset ID của món đồ đổi sau mỗi lần trade trên Steam, nên việc ghép mua-bán dựa trên tên + float + pattern seed.
