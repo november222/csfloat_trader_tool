@@ -184,7 +184,7 @@ export async function fetchMySteamId(apiKey: string): Promise<string> {
  * Chỉ nhận listing có người bán đúng là bạn (nếu API bỏ qua user_id thì không lẫn listing của người khác),
  * và dừng khi một trang không có listing mới.
  */
-export async function fetchMyListings(apiKey: string, steamId: string, maxPages = 10): Promise<NormListing[]> {
+async function fetchListingsByUser(apiKey: string, steamId: string, maxPages = 10): Promise<NormListing[]> {
   const limit = 50;
   const out: NormListing[] = [];
   const seen = new Set<string>();
@@ -250,4 +250,45 @@ export async function runSurvey(apiKey: string, marketHashName: string, float: n
   const { floatMin, floatMax } = floatRange(float, tol);
   const listings = await fetchSimilarListings(apiKey, { marketHashName, minFloat: floatMin, maxFloat: floatMax });
   return buildSurvey(listings, float, tol);
+}
+
+/** Stall của một người dùng qua endpoint riêng /users/<id>/stall (phân trang bằng cursor). */
+async function fetchStall(apiKey: string, steamId: string, maxPages = 10): Promise<NormListing[]> {
+  const out: NormListing[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  for (let page = 0; page < maxPages; page++) {
+    const q = new URLSearchParams({ limit: "50" });
+    if (cursor) q.set("cursor", cursor);
+    const data = (await csfloatGet(`/users/${steamId}/stall?${q.toString()}`, apiKey)) as Any;
+    const list: Any[] = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+    let added = 0;
+    for (const raw of list) {
+      const l = normListing(raw);
+      if (l && !seen.has(l.listingId)) {
+        seen.add(l.listingId);
+        out.push(l);
+        added++;
+      }
+    }
+    cursor = typeof data?.cursor === "string" && data.cursor ? data.cursor : null;
+    if (!cursor || added === 0) break;
+    await sleep(PAGE_GAP_MS);
+  }
+  return out;
+}
+
+/**
+ * Lấy các món đang rao trong stall của bạn. Ưu tiên endpoint stall riêng (CSFloat giới hạn endpoint /listings
+ * chặt hơn); nếu endpoint đó không dùng được (400/404/405) thì quay về /listings?user_id=.
+ */
+export async function fetchMyListings(apiKey: string, steamId: string, maxPages = 10): Promise<NormListing[]> {
+  try {
+    return await fetchStall(apiKey, steamId, maxPages);
+  } catch (e) {
+    if (e instanceof CsfloatError && [400, 404, 405].includes(e.status)) {
+      return fetchListingsByUser(apiKey, steamId, maxPages);
+    }
+    throw e;
+  }
 }

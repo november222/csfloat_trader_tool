@@ -23,14 +23,14 @@ const LS_TRADES = "csf_trades_cache";
 const LS_SURVEYS = "csf_surveys_cache";
 const LS_MANUAL = "csf_manual_buys"; // giá mua nhập tay (cent) theo khoá của từng dòng
 const LS_STEAM_ID = "csf_steam_id";
-const LS_CALL_MODE = "csf_call_mode"; // cách gọi CSFloat: auto | direct | server
+const LS_CALL_MODE = "csf_call_mode2"; // cách gọi CSFloat: auto | direct | server
 const LS_DIRECT_BLOCKED = "csf_direct_blocked"; // trình duyệt từng bị chặn khi gọi trực tiếp (CORS)
 
 type CallMode = "auto" | "direct" | "server";
 const CALL_MODE_LABELS: Record<CallMode, string> = {
-  auto: "Tự động (ưu tiên trình duyệt của bạn)",
-  direct: "Chỉ trình duyệt của bạn",
-  server: "Chỉ qua server (Vercel)",
+  server: "Qua server (mặc định)",
+  auto: "Thử trình duyệt trước, lỗi thì qua server",
+  direct: "Chỉ trình duyệt (thử nghiệm)",
 };
 const LS_MANUAL_SELL = "csf_manual_sells"; // giá bán nhập tay (bán ở sàn khác) theo khoá của từng dòng
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
@@ -98,7 +98,7 @@ export default function Home() {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [view, setView] = useState<"trades" | "inventory">("trades");
-  const [callMode, setCallMode] = useState<CallMode>("auto");
+  const [callMode, setCallMode] = useState<CallMode>("server");
   const [lastPath, setLastPath] = useState<"direct" | "server" | null>(null);
   const directBlocked = useRef(false);
   const [steamId, setSteamId] = useState("");
