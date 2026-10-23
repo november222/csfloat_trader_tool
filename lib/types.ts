@@ -18,6 +18,10 @@ export interface NormTrade {
   priceCents: number;
   at: string; // ISO time
   item: TradeItem;
+  /** true nếu giao dịch còn đang chờ xác nhận (trạng thái pending, thường là 8 ngày bảo vệ giao dịch) */
+  pending?: boolean;
+  /** Thời điểm hết bảo vệ giao dịch / dự kiến xác nhận (ISO), nếu CSFloat báo */
+  protectionEndsAt?: string | null;
 }
 
 /** Một listing đang rao bán trong stall của người dùng, giá rao bằng cent USD. */
@@ -29,7 +33,14 @@ export interface NormListing {
   item: TradeItem;
 }
 
-export type RowStatus = "sold" | "holding" | "listed" | "sold_unknown_buy" | "listed_unknown_buy";
+export type RowStatus =
+  | "sold"
+  | "holding"
+  | "listed"
+  | "sold_unknown_buy"
+  | "listed_unknown_buy"
+  | "pending_buy" // đã mua, đang chờ xác nhận
+  | "pending_sell"; // đã bán, đang chờ xác nhận (chưa nhận tiền)
 
 export interface PnlRow {
   key: string;
@@ -72,6 +83,13 @@ export interface PnlSummary {
   realizedProfitCents: number;
   investedSoldCents: number;
   holdingCostCents: number;
+  pendingBuyCount: number;
+  pendingBuyCostCents: number;
+  pendingSellCount: number;
+  /** Tổng tiền dự kiến nhận (sau phí) từ các món đã bán đang chờ xác nhận */
+  pendingSellNetCents: number;
+  /** Lãi/lỗ ước tính của các món đã bán đang chờ xác nhận (chỉ tính món đã biết giá mua) */
+  pendingSellEstProfitCents: number;
   listedCostCents: number;
   listedAskCents: number;
   listedEstProfitCents: number;

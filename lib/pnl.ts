@@ -31,6 +31,9 @@ function applyManualBuy(row: PnlRow, cents: number): PnlRow {
   if (row.status === "sold_unknown_buy") {
     return { ...row, status: "sold", buy, manualBuy: true, profitCents: profit, profitPct: pct };
   }
+  if (row.status === "pending_sell") {
+    return { ...row, buy, manualBuy: true, estProfitCents: profit, estProfitPct: pct };
+  }
   return { ...row, status: "listed", buy, manualBuy: true, estProfitCents: profit, estProfitPct: pct };
 }
 
@@ -110,23 +113,26 @@ export function buildPnl(
         const buy = b[pick];
         const net = netAfterFee(sell.priceCents, feePct);
         const profit = net - buy.priceCents;
+        const pctVal = buy.priceCents > 0 ? (profit / buy.priceCents) * 100 : null;
+        // Bán đang chờ xác nhận: chưa nhận tiền nên chỉ là lãi/lỗ ước tính, chưa tính vào lãi/lỗ đã chốt
+        const isPending = sell.pending === true;
         rows.push({
           key: `${k}|${sell.tradeId}`,
-          status: "sold",
+          status: isPending ? "pending_sell" : "sold",
           item: sell.item.iconUrl ? sell.item : buy.item,
           buy,
           sell,
           listing: null,
           netCents: net,
-          profitCents: profit,
-          profitPct: buy.priceCents > 0 ? (profit / buy.priceCents) * 100 : null,
-          estProfitCents: null,
-          estProfitPct: null,
+          profitCents: isPending ? null : profit,
+          profitPct: isPending ? null : pctVal,
+          estProfitCents: isPending ? profit : null,
+          estProfitPct: isPending ? pctVal : null,
         });
       } else {
         rows.push({
           key: `${k}|${sell.tradeId}`,
-          status: "sold_unknown_buy",
+          status: sell.pending ? "pending_sell" : "sold_unknown_buy",
           item: sell.item,
           buy: null,
           sell,
@@ -150,6 +156,23 @@ export function buildPnl(
     const pool = [...l];
     for (const i of remaining) {
       const buy = b[i];
+      // Món mới mua còn đang chờ xác nhận: chưa thể đang rao, không lấy listing của món khác
+      if (buy.pending) {
+        rows.push({
+          key: `${k}|${buy.tradeId}`,
+          status: "pending_buy",
+          item: buy.item,
+          buy,
+          sell: null,
+          listing: null,
+          netCents: null,
+          profitCents: null,
+          profitPct: null,
+          estProfitCents: null,
+          estProfitPct: null,
+        });
+        continue;
+      }
       const listing = pool.pop() ?? null;
       if (listing) {
         const net = netAfterFee(listing.priceCents, feePct);
@@ -206,7 +229,11 @@ export function buildPnl(
   const finalRows = rows.map((r) => {
     const manual = manualBuys[r.key];
     let row = r;
-    if ((row.status === "sold_unknown_buy" || row.status === "listed_unknown_buy") && manual != null) {
+    const unknownBuy =
+      row.status === "sold_unknown_buy" ||
+      row.status === "listed_unknown_buy" ||
+      (row.status === "pending_sell" && row.buy == null);
+    if (unknownBuy && manual != null) {
       row = applyManualBuy(row, manual);
     }
     // Giá bán nhập tay chỉ áp dụng cho món đã biết giá mua và chưa bán trên CSFloat (đang giữ hoặc đang rao).
@@ -235,6 +262,11 @@ export function summarize(rows: PnlRow[]): PnlSummary {
     realizedProfitCents: 0,
     investedSoldCents: 0,
     holdingCostCents: 0,
+    pendingBuyCount: 0,
+    pendingBuyCostCents: 0,
+    pendingSellCount: 0,
+    pendingSellNetCents: 0,
+    pendingSellEstProfitCents: 0,
     listedCostCents: 0,
     listedAskCents: 0,
     listedEstProfitCents: 0,
@@ -256,6 +288,14 @@ export function summarize(rows: PnlRow[]): PnlSummary {
       s.listedCostCents += r.buy.priceCents;
       s.listedAskCents += r.listing.priceCents;
       s.listedEstProfitCents += r.estProfitCents ?? 0;
+    } else if (r.status === "pending_buy" && r.buy) {
+      s.pendingBuyCount++;
+      s.pendingBuyCostCents += r.buy.priceCents;
+    } else if (r.status === "pending_sell") {
+      s.pendingSellCount++;
+      s.pendingSellNetCents += r.netCents ?? 0;
+      if (r.buy) s.pendingSellEstProfitCents += r.estProfitCents ?? 0;
+      else s.unknownBuyCount++;
     } else if (r.status === "sold_unknown_buy" || r.status === "listed_unknown_buy") {
       s.unknownBuyCount++;
     }

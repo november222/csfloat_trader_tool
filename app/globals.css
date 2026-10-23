@@ -140,3 +140,5 @@ button.small { padding: 5px 10px; font-size: 13px; }
 .inv-card .name { font-weight: 600; font-size: 13px; word-break: break-word; }
 .inv-card .meta { color: var(--muted); font-size: 12px; }
 .view-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+
+.badge.pending { background: rgba(227, 179, 65, 0.15); color: var(--amber); }

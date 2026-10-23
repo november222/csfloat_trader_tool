@@ -188,3 +188,56 @@ test("món mua không rõ giá mua nhưng đã nhập giá mua tay rồi nhập 
   assert.ok(manual);
   assert.equal(manual?.profitCents, Math.round(8000 * 0.98) - 5000);
 });
+
+const pend = (t: ReturnType<typeof trade>, ends = "2026-12-01T00:00:00Z") => ({ ...t, pending: true, protectionEndsAt: ends });
+
+test("giao dịch mua đang chờ xác nhận là 'pending_buy', không lấy listing của món khác và tính vào vốn chờ xác nhận", () => {
+  const rows = buildPnl([pend(trade("1", "buyer", 10000, "2026-01-01T00:00:00Z"))], 2);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "pending_buy");
+  const s = summarize(rows);
+  assert.equal(s.pendingBuyCount, 1);
+  assert.equal(s.pendingBuyCostCents, 10000);
+  assert.equal(s.holdingCount, 0);
+});
+
+test("bán đang chờ xác nhận: lãi/lỗ chỉ là ước tính, không vào lãi/lỗ đã chốt", () => {
+  const rows = buildPnl(
+    [trade("1", "buyer", 10000, "2026-01-01T00:00:00Z"), pend(trade("2", "seller", 12000, "2026-01-05T00:00:00Z"))],
+    2,
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "pending_sell");
+  assert.equal(rows[0].profitCents, null);
+  assert.equal(rows[0].estProfitCents, Math.round(12000 * 0.98) - 10000);
+  const s = summarize(rows);
+  assert.equal(s.soldCount, 0);
+  assert.equal(s.realizedProfitCents, 0);
+  assert.equal(s.pendingSellCount, 1);
+  assert.equal(s.pendingSellNetCents, Math.round(12000 * 0.98));
+  assert.equal(s.pendingSellEstProfitCents, Math.round(12000 * 0.98) - 10000);
+});
+
+test("bán đang chờ xác nhận không rõ giá mua: nhập giá mua tay thì tính được lãi/lỗ ước tính", () => {
+  const sell = pend(trade("9", "seller", 8000, "2026-02-01T00:00:00Z", 0.45));
+  const before = buildPnl([sell], 2);
+  assert.equal(before[0].status, "pending_sell");
+  assert.equal(before[0].buy, null);
+  assert.equal(summarize(before).unknownBuyCount, 1);
+  const after = buildPnl([sell], 2, [], { [before[0].key]: 5000 });
+  assert.equal(after[0].status, "pending_sell");
+  assert.equal(after[0].manualBuy, true);
+  assert.equal(after[0].estProfitCents, Math.round(8000 * 0.98) - 5000);
+  assert.equal(summarize(after).unknownBuyCount, 0);
+});
+
+test("mua đã xác nhận + mua mới đang chờ cùng một món: listing chỉ gán cho lệnh mua đã xác nhận", () => {
+  const listing = { listingId: "L1", priceCents: 15000, at: "2026-01-10T00:00:00Z", type: "buy_now", item: item(0.2) };
+  const rows = buildPnl(
+    [trade("1", "buyer", 10000, "2026-01-01T00:00:00Z"), pend(trade("2", "buyer", 11000, "2026-01-08T00:00:00Z"))],
+    2,
+    [listing],
+  );
+  assert.equal(rows.filter((r) => r.status === "listed").length, 1);
+  assert.equal(rows.filter((r) => r.status === "pending_buy").length, 1);
+});

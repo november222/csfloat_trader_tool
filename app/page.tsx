@@ -6,15 +6,24 @@ import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import Inventory from "./Inventory";
-import { CsfloatError, NetworkError, fetchMyListings, fetchMySteamId, fetchTrades, runSurvey } from "@/lib/csfloat";
+import {
+  CsfloatError,
+  NetworkError,
+  fetchMyListings,
+  fetchMySteamId,
+  fetchPendingTrades,
+  fetchTrades,
+  runSurvey,
+} from "@/lib/csfloat";
 import { SORT_LABELS, sortRows, type SortDir, type SortKey } from "@/lib/sort";
 
 type SurveyState = SurveyResult | { error: string };
-type Filter = "all" | "sold" | "listed" | "holding";
+type Filter = "all" | "sold" | "listed" | "pending" | "holding";
 const FILTER_LABELS: Record<Filter, string> = {
   all: "Tất cả",
   sold: "Đã bán",
   listed: "Đang bán",
+  pending: "Chờ xác nhận",
   holding: "Đang giữ",
 };
 
@@ -36,11 +45,12 @@ const LS_MANUAL_SELL = "csf_manual_sells"; // giá bán nhập tay (bán ở sà
 const SURVEY_GAP_MS = 2500; // khoảng nghỉ tối thiểu giữa 2 lần khảo giá
 const PART_GAP_MS = 2000; // nghỉ giữa các phần khi tải (lịch sử mua → bán → stall)
 
-type Part = "buyer" | "seller" | "stall";
+type Part = "buyer" | "seller" | "stall" | "pending";
 const PART_LABEL: Record<Part, string> = {
   buyer: "lịch sử mua",
   seller: "lịch sử bán",
   stall: "stall (món đang bán)",
+  pending: "giao dịch đang chờ xác nhận",
 };
 
 type ErrorDetail = { endpoint: string; attempts: number; headers: Record<string, string>; body: string };
@@ -83,6 +93,7 @@ export default function Home() {
   const [keyInput, setKeyInput] = useState("");
   const [buys, setBuys] = useState<NormTrade[]>([]);
   const [sells, setSells] = useState<NormTrade[]>([]);
+  const [pendings, setPendings] = useState<NormTrade[]>([]);
   const [listings, setListings] = useState<NormListing[]>([]);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -92,7 +103,7 @@ export default function Home() {
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const hydrated = useRef(false);
-  const trades = useMemo(() => [...buys, ...sells], [buys, sells]);
+  const trades = useMemo(() => [...buys, ...sells, ...pendings], [buys, sells, pendings]);
   const cooldown = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
   const [fee, setFee] = useState(2);
   const [filter, setFilter] = useState<Filter>("all");
@@ -123,6 +134,7 @@ export default function Home() {
     const cached = readLS<{
       buys?: NormTrade[];
       sells?: NormTrade[];
+      pending?: NormTrade[];
       trades?: NormTrade[]; // định dạng cũ
       listings?: NormListing[];
       fetchedAt?: string | null;
@@ -131,6 +143,7 @@ export default function Home() {
       const all = cached.trades ?? [];
       setBuys(cached.buys ?? all.filter((t) => t.role === "buyer"));
       setSells(cached.sells ?? all.filter((t) => t.role === "seller"));
+      setPendings(cached.pending ?? []);
       setListings(cached.listings ?? []);
       setFetchedAt(cached.fetchedAt ?? null);
     }
@@ -161,8 +174,8 @@ export default function Home() {
   // Lưu dữ liệu đã tải vào trình duyệt (bỏ qua lần render đầu, trước khi nạp xong dữ liệu cũ)
   useEffect(() => {
     if (!hydrated.current) return;
-    writeLS(LS_TRADES, { buys, sells, listings, fetchedAt });
-  }, [buys, sells, listings, fetchedAt]);
+    writeLS(LS_TRADES, { buys, sells, pending: pendings, listings, fetchedAt });
+  }, [buys, sells, pendings, listings, fetchedAt]);
   useEffect(() => {
     hydrated.current = true;
   }, []);
@@ -269,6 +282,7 @@ export default function Home() {
   const loadParts = async (parts: Part[]) => {
     setLoading(true);
     setError(null);
+    let sid = steamId; // Steam ID có thể được cập nhật giữa chừng khi tải stall
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];
       setProgress(`Đang tải ${PART_LABEL[part]} (${i + 1}/${parts.length})…`);
@@ -282,7 +296,22 @@ export default function Home() {
             () => callApi("/api/stall"),
           );
           setListings(d.listings ?? []);
-          if (d.steamId) updateSteamId(String(d.steamId));
+          if (d.steamId) {
+            sid = String(d.steamId);
+            updateSteamId(sid);
+          }
+        } else if (part === "pending") {
+          const d = await viaCsfloat(
+            async () => ({
+              trades: await fetchPendingTrades(apiKey, sid || (await fetchMySteamId(apiKey))),
+            }),
+            () => callApi(`/api/pending${sid ? `?steamid=${sid}` : ""}`),
+          );
+          setPendings(d.trades ?? []);
+          if (d.steamId && !sid) {
+            sid = String(d.steamId);
+            updateSteamId(sid);
+          }
         } else {
           const d = await viaCsfloat(
             async () => ({ trades: await fetchTrades(apiKey, part) }),
@@ -356,6 +385,7 @@ export default function Home() {
     return rows.filter((r) => {
       if (filter === "sold" && r.status !== "sold" && r.status !== "sold_unknown_buy") return false;
       if (filter === "listed" && r.status !== "listed" && r.status !== "listed_unknown_buy") return false;
+      if (filter === "pending" && r.status !== "pending_buy" && r.status !== "pending_sell") return false;
       if (filter === "holding" && r.status !== "holding") return false;
       if (q && !r.item.marketHashName.toLowerCase().includes(q)) return false;
       return true;
@@ -393,7 +423,12 @@ export default function Home() {
   const holdingCounts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const r of rows) {
-      if (r.status === "holding" || r.status === "listed" || r.status === "listed_unknown_buy") {
+      if (
+        r.status === "holding" ||
+        r.status === "listed" ||
+        r.status === "listed_unknown_buy" ||
+        r.status === "pending_buy"
+      ) {
         c[r.item.marketHashName] = (c[r.item.marketHashName] ?? 0) + 1;
       }
     }
@@ -444,7 +479,7 @@ export default function Home() {
               Xoá key
             </button>
           )}
-          <button onClick={() => loadParts(["buyer", "seller", "stall"])} disabled={loading || cooldown > 0}>
+          <button onClick={() => loadParts(["buyer", "seller", "stall", "pending"])} disabled={loading || cooldown > 0}>
             {loading
               ? "Đang tải…"
               : cooldown > 0
@@ -454,8 +489,8 @@ export default function Home() {
                   : "Tải giao dịch & stall"}
           </button>
           {hasData && (
-            <button className="ghost" onClick={() => loadParts(["stall"])} disabled={loading || cooldown > 0}>
-              Chỉ làm mới stall
+            <button className="ghost" onClick={() => loadParts(["stall", "pending"])} disabled={loading || cooldown > 0}>
+              Chỉ làm mới stall & chờ xác nhận
             </button>
           )}
         </div>
@@ -534,6 +569,18 @@ export default function Home() {
                 <span className={signClass(summary.listedEstProfitCents)}>
                   {signedUsd(summary.listedEstProfitCents)}
                 </span>
+              </div>
+            </div>
+            <div className="stat">
+              <div className="label">Chờ xác nhận</div>
+              <div className="value">{summary.pendingBuyCount + summary.pendingSellCount}</div>
+              <div className="note">
+                Mua {summary.pendingBuyCount} ({usd(summary.pendingBuyCostCents)}) · Bán {summary.pendingSellCount} (nhận{" "}
+                {usd(summary.pendingSellNetCents)}, ước tính{" "}
+                <span className={signClass(summary.pendingSellEstProfitCents)}>
+                  {signedUsd(summary.pendingSellEstProfitCents)}
+                </span>
+                )
               </div>
             </div>
             <div className="stat">
@@ -687,7 +734,15 @@ function ItemCard({
   onManual: (cents: number | null) => void;
   onManualSell: (ms: ManualSell | null) => void;
 }) {
-  const needsManual = row.status === "sold_unknown_buy" || row.status === "listed_unknown_buy";
+  const needsManual =
+    row.status === "sold_unknown_buy" ||
+    row.status === "listed_unknown_buy" ||
+    (row.status === "pending_sell" && row.buy == null);
+  // Giao dịch đang chờ xác nhận: hiện ngày hết bảo vệ giao dịch nếu CSFloat báo
+  const pendingTrade = row.status === "pending_sell" ? row.sell : row.status === "pending_buy" ? row.buy : null;
+  const endsAt = pendingTrade?.protectionEndsAt ?? null;
+  const endsMs = endsAt ? Date.parse(endsAt) : NaN;
+  const daysLeft = Number.isNaN(endsMs) ? null : Math.max(0, Math.ceil((endsMs - Date.now()) / 86400000));
   // Cho phép nhập giá bán ở sàn khác với món đã biết giá mua mà chưa bán trên CSFloat (hoặc đã nhập tay trước đó)
   const canManualSell = ((row.status === "holding" || row.status === "listed") && row.buy != null) || !!row.manualSell;
   const currentManualSell: ManualSell | null =
@@ -703,6 +758,10 @@ function ItemCard({
       <span className="badge listed">Đang bán</span>
     ) : row.status === "holding" ? (
       <span className="badge holding">Đang giữ</span>
+    ) : row.status === "pending_buy" ? (
+      <span className="badge pending">Đang mua · chờ xác nhận</span>
+    ) : row.status === "pending_sell" ? (
+      <span className="badge pending">Đã bán · chờ xác nhận</span>
     ) : row.status === "listed_unknown_buy" ? (
       <span className="badge listed">Đang bán · không rõ giá mua</span>
     ) : (
@@ -721,6 +780,15 @@ function ItemCard({
           Float {floatStr(row.item.floatValue)}
           {row.item.paintSeed != null ? ` · Seed ${row.item.paintSeed}` : ""}
         </div>
+        {pendingTrade && (
+          <div className="meta" style={{ color: "var(--amber)" }}>
+            Đang chờ xác nhận
+            {endsAt && daysLeft != null
+              ? ` · đến ${dateStr(endsAt)}${daysLeft > 0 ? ` (còn ${daysLeft} ngày)` : " (sắp xác nhận)"}`
+              : ""}
+            {row.status === "pending_sell" ? " · chưa nhận tiền" : ""}
+          </div>
+        )}
 
         <div className="figures">
           <Fig
@@ -750,7 +818,20 @@ function ItemCard({
                 }
                 v={usd(row.sell?.priceCents)}
               />
-              {row.sell && <Fig k={`Thực nhận (−${row.sellFeePct ?? fee}%)`} v={usd(row.netCents)} />}
+              {row.sell && (
+                <Fig
+                  k={`${row.status === "pending_sell" ? "Dự kiến nhận" : "Thực nhận"} (−${row.sellFeePct ?? fee}%)`}
+                  v={usd(row.netCents)}
+                />
+              )}
+              {row.status === "pending_sell" && row.estProfitCents != null && (
+                <div className="fig">
+                  <div className="k">Lãi/lỗ ước tính</div>
+                  <div className={`v ${signClass(row.estProfitCents)}`}>
+                    {signedUsd(row.estProfitCents)} ({pct(row.estProfitPct)})
+                  </div>
+                </div>
+              )}
             </>
           )}
           {row.status === "sold" && (

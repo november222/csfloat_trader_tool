@@ -117,10 +117,10 @@ function normItem(raw: Any): TradeItem {
   };
 }
 
-function normTrade(raw: Any, role: Role): NormTrade | null {
+function normTrade(raw: Any, role: Role, pending = false): NormTrade | null {
   const contract = raw?.contract;
   if (!contract || typeof contract.price !== "number") return null;
-  return {
+  const t: NormTrade = {
     tradeId: String(raw.id),
     listingId: contract.id != null ? String(contract.id) : null,
     role,
@@ -128,6 +128,12 @@ function normTrade(raw: Any, role: Role): NormTrade | null {
     at: String(raw.verified_at ?? raw.accepted_at ?? raw.created_at ?? ""),
     item: normItem(contract.item),
   };
+  if (pending) {
+    t.pending = true;
+    const ends = raw.trade_protection_ends_at ?? raw.verify_sale_at ?? null;
+    t.protectionEndsAt = typeof ends === "string" ? ends : null;
+  }
+  return t;
 }
 
 /**
@@ -291,4 +297,37 @@ export async function fetchMyListings(apiKey: string, steamId: string, maxPages 
     }
     throw e;
   }
+}
+
+/**
+ * Lấy các giao dịch đang chờ xác nhận (state=pending): vừa mua hoặc vừa bán, còn trong thời gian bảo vệ giao dịch.
+ * Vai trò mua/bán được xác định bằng cách so buyer_id với Steam ID của bạn.
+ */
+export async function fetchPendingTrades(apiKey: string, steamId: string, maxPages = 5): Promise<NormTrade[]> {
+  const limit = 100;
+  const out: NormTrade[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < maxPages; page++) {
+    const data = (await csfloatGet(`/me/trades?state=pending&limit=${limit}&page=${page}`, apiKey)) as Any;
+    const list: Any[] = Array.isArray(data) ? data : Array.isArray(data?.trades) ? data.trades : [];
+    let added = 0;
+    for (const raw of list) {
+      const buyerId = raw?.buyer_id ?? raw?.buyer?.steam_id;
+      const sellerId = raw?.seller_id ?? raw?.seller?.steam_id;
+      let role: Role | null = null;
+      if (buyerId != null && String(buyerId) === steamId) role = "buyer";
+      else if (sellerId != null && String(sellerId) === steamId) role = "seller";
+      else if (buyerId != null) role = "seller"; // không phải người mua thì là người bán
+      if (!role) continue;
+      const t = normTrade(raw, role, true);
+      if (t && !seen.has(t.tradeId)) {
+        seen.add(t.tradeId);
+        out.push(t);
+        added++;
+      }
+    }
+    if (list.length < limit || added === 0) break;
+    await sleep(PAGE_GAP_MS);
+  }
+  return out;
 }
