@@ -1,4 +1,4 @@
-import type { NormTrade, Role, TradeItem } from "./types";
+import type { NormListing, NormTrade, Role, TradeItem } from "./types";
 
 export const CSFLOAT_BASE = "https://csfloat.com/api/v1";
 
@@ -70,6 +70,49 @@ export async function fetchTrades(apiKey: string, role: Role, maxPages = 20): Pr
     for (const raw of list) {
       const t = normTrade(raw, role);
       if (t) out.push(t);
+    }
+    if (list.length < limit) break;
+    await sleep(400);
+  }
+  return out;
+}
+
+function normListing(raw: Any): NormListing | null {
+  if (!raw || typeof raw.price !== "number" || raw.id == null) return null;
+  if (raw.state && raw.state !== "listed") return null; // chỉ lấy món đang rao
+  return {
+    listingId: String(raw.id),
+    priceCents: raw.price,
+    at: String(raw.created_at ?? ""),
+    type: typeof raw.type === "string" ? raw.type : null,
+    item: normItem(raw.item),
+  };
+}
+
+/** Lấy Steam ID của chủ API key. */
+export async function fetchMySteamId(apiKey: string): Promise<string> {
+  const data = (await csfloatGet("/me", apiKey)) as Any;
+  const id = data?.user?.steam_id ?? data?.steam_id;
+  if (!id) throw new CsfloatError(502, "Không đọc được Steam ID từ /me.");
+  return String(id);
+}
+
+/** Lấy các món đang rao bán trong stall của bạn (listing đang ở trạng thái listed), có phân trang. */
+export async function fetchMyListings(apiKey: string, steamId: string, maxPages = 10): Promise<NormListing[]> {
+  const limit = 50;
+  const out: NormListing[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const q = new URLSearchParams({
+      user_id: steamId,
+      sort_by: "most_recent",
+      limit: String(limit),
+      page: String(page),
+    });
+    const data = (await csfloatGet(`/listings?${q.toString()}`, apiKey)) as Any;
+    const list: Any[] = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+    for (const raw of list) {
+      const l = normListing(raw);
+      if (l) out.push(l);
     }
     if (list.length < limit) break;
     await sleep(400);

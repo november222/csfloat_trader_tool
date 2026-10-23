@@ -6,7 +6,8 @@ Trang web theo dõi các món đồ CS2 bạn đã **mua / bán** trên CSFloat,
 
 - Lấy lịch sử giao dịch đã hoàn tất (`/me/trades`, trạng thái `verified`) của bạn, cả vai trò người mua và người bán.
 - Ghép lệnh mua với lệnh bán của cùng một món (tên + float + pattern seed) để tính lãi/lỗ: `thực nhận = giá bán × (1 − phí)`, `lãi/lỗ = thực nhận − giá mua`. Phí mặc định 2%, chỉnh được trên giao diện.
-- Phân loại: **Đã bán**, **Đang giữ**, **Không rõ giá mua** (bán nhưng không thấy lệnh mua).
+- Phân loại: **Đã bán**, **Đang bán** (đang rao trong stall của bạn), **Đang giữ** (đã mua, chưa rao), **Không rõ giá mua** (bán/đang rao nhưng không thấy lệnh mua).
+- Món **Đang bán** hiện giá đang rao và lãi/lỗ ước tính nếu bán được đúng giá đó (sau phí). Stall được lấy bằng `/me` (lấy Steam ID) rồi `/listings?user_id=<steam_id>`; nếu bước này lỗi thì giao dịch vẫn hiển thị kèm thông báo.
 - Hiển thị ảnh món đồ và link mở thẳng trên CSFloat.
 - Nút **Khảo giá** trên từng món: gửi đúng 1 request lấy các listing `buy_now` cùng tên với float trong khoảng ± bạn chọn, rồi hiện khoảng giá (thấp nhất / trung vị / cao nhất), 5 listing có float gần nhất kèm link. Không có khảo giá tự động, và có khoảng nghỉ 2,5 giây giữa các lần bấm để tránh bị CSFloat chặn (HTTP 429).
 - Dữ liệu giao dịch và kết quả khảo giá được lưu tạm trong trình duyệt (localStorage) để không phải gọi lại API mỗi lần mở trang.
@@ -42,6 +43,6 @@ Có thể thêm biến môi trường `CSFLOAT_API_KEY` trong Vercel (Settings �
 
 ## Lưu ý
 
-- Docs chính thức của CSFloat không mô tả endpoint `/me/trades`; tool dùng endpoint này theo các thư viện cộng đồng. Nếu CSFloat đổi cấu trúc dữ liệu, chỉnh hàm `normTrade` trong `lib/csfloat.ts`.
+- Docs chính thức của CSFloat không mô tả endpoint `/me/trades` và `/me`; tool dùng endpoint này theo các thư viện cộng đồng. Nếu CSFloat đổi cấu trúc dữ liệu, chỉnh hàm `normTrade` trong `lib/csfloat.ts`.
 - Giá của CSFloat tính bằng cent USD.
 - Asset ID của món đồ đổi sau mỗi lần trade trên Steam, nên việc ghép mua-bán dựa trên tên + float + pattern seed.

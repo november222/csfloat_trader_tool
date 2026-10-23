@@ -1,9 +1,13 @@
-import type { NormTrade, PnlRow, PnlSummary } from "./types";
+import type { NormListing, NormTrade, PnlRow, PnlSummary, TradeItem } from "./types";
 
-/** Khoá để ghép lệnh mua và lệnh bán của cùng một món (asset_id đổi sau mỗi lần trade nên dùng float + pattern). */
+function keyOf(item: TradeItem): string {
+  const f = item.floatValue == null ? "nofloat" : item.floatValue.toFixed(12);
+  return `${item.marketHashName}|${f}|${item.paintSeed ?? ""}`;
+}
+
+/** Khoá để ghép lệnh mua, lệnh bán và listing của cùng một món (asset_id đổi sau mỗi lần trade nên dùng float + pattern). */
 export function itemKey(t: NormTrade): string {
-  const f = t.item.floatValue == null ? "nofloat" : t.item.floatValue.toFixed(12);
-  return `${t.item.marketHashName}|${f}|${t.item.paintSeed ?? ""}`;
+  return keyOf(t.item);
 }
 
 /** Số tiền nhận được sau khi người bán chịu phí (mặc định 2%). */
@@ -11,10 +15,11 @@ export function netAfterFee(priceCents: number, feePct: number): number {
   return Math.round(priceCents * (1 - feePct / 100));
 }
 
-export function buildPnl(trades: NormTrade[], feePct = 2): PnlRow[] {
+export function buildPnl(trades: NormTrade[], feePct = 2, listings: NormListing[] = []): PnlRow[] {
   const sorted = [...trades].sort((a, b) => a.at.localeCompare(b.at));
   const buys = new Map<string, NormTrade[]>();
   const sells = new Map<string, NormTrade[]>();
+  const stall = new Map<string, NormListing[]>();
 
   for (const t of sorted) {
     const map = t.role === "buyer" ? buys : sells;
@@ -23,13 +28,20 @@ export function buildPnl(trades: NormTrade[], feePct = 2): PnlRow[] {
     if (list) list.push(t);
     else map.set(k, [t]);
   }
+  for (const l of [...listings].sort((a, b) => a.at.localeCompare(b.at))) {
+    const k = keyOf(l.item);
+    const list = stall.get(k);
+    if (list) list.push(l);
+    else stall.set(k, [l]);
+  }
 
   const rows: PnlRow[] = [];
-  const keys = new Set<string>([...buys.keys(), ...sells.keys()]);
+  const keys = new Set<string>([...buys.keys(), ...sells.keys(), ...stall.keys()]);
 
   for (const k of keys) {
     const b = [...(buys.get(k) ?? [])];
     const s = [...(sells.get(k) ?? [])];
+    const l = [...(stall.get(k) ?? [])];
     const used = new Set<number>();
 
     // Với mỗi lệnh bán (theo thời gian), ghép với lệnh mua chưa dùng gần nhất trước đó.
@@ -50,9 +62,12 @@ export function buildPnl(trades: NormTrade[], feePct = 2): PnlRow[] {
           item: sell.item.iconUrl ? sell.item : buy.item,
           buy,
           sell,
+          listing: null,
           netCents: net,
           profitCents: profit,
           profitPct: buy.priceCents > 0 ? (profit / buy.priceCents) * 100 : null,
+          estProfitCents: null,
+          estProfitPct: null,
         });
       } else {
         rows.push({
@@ -61,26 +76,76 @@ export function buildPnl(trades: NormTrade[], feePct = 2): PnlRow[] {
           item: sell.item,
           buy: null,
           sell,
+          listing: null,
           netCents: netAfterFee(sell.priceCents, feePct),
           profitCents: null,
           profitPct: null,
+          estProfitCents: null,
+          estProfitPct: null,
         });
       }
     }
 
-    b.forEach((buy, i) => {
-      if (used.has(i)) return;
+    // Các lệnh mua chưa bán: nếu đang rao trong stall thì là "Đang bán", không thì "Đang giữ".
+    // Ưu tiên gán listing cho lệnh mua mới nhất (món đang rao thường là lần mua gần nhất).
+    const remaining: number[] = [];
+    b.forEach((_, i) => {
+      if (!used.has(i)) remaining.push(i);
+    });
+    remaining.reverse();
+    const pool = [...l];
+    for (const i of remaining) {
+      const buy = b[i];
+      const listing = pool.pop() ?? null;
+      if (listing) {
+        const net = netAfterFee(listing.priceCents, feePct);
+        const est = net - buy.priceCents;
+        rows.push({
+          key: `${k}|${buy.tradeId}`,
+          status: "listed",
+          item: listing.item.iconUrl ? listing.item : buy.item,
+          buy,
+          sell: null,
+          listing,
+          netCents: net,
+          profitCents: null,
+          profitPct: null,
+          estProfitCents: est,
+          estProfitPct: buy.priceCents > 0 ? (est / buy.priceCents) * 100 : null,
+        });
+      } else {
+        rows.push({
+          key: `${k}|${buy.tradeId}`,
+          status: "holding",
+          item: buy.item,
+          buy,
+          sell: null,
+          listing: null,
+          netCents: null,
+          profitCents: null,
+          profitPct: null,
+          estProfitCents: null,
+          estProfitPct: null,
+        });
+      }
+    }
+
+    // Listing còn thừa: đang rao nhưng không tìm thấy lệnh mua tương ứng.
+    for (const listing of pool) {
       rows.push({
-        key: `${k}|${buy.tradeId}`,
-        status: "holding",
-        item: buy.item,
-        buy,
+        key: `${k}|L${listing.listingId}`,
+        status: "listed_unknown_buy",
+        item: listing.item,
+        buy: null,
         sell: null,
-        netCents: null,
+        listing,
+        netCents: netAfterFee(listing.priceCents, feePct),
         profitCents: null,
         profitPct: null,
+        estProfitCents: null,
+        estProfitPct: null,
       });
-    });
+    }
   }
 
   // Mới nhất lên đầu (theo lần giao dịch gần nhất của dòng đó)
@@ -89,17 +154,21 @@ export function buildPnl(trades: NormTrade[], feePct = 2): PnlRow[] {
 }
 
 function lastAt(r: PnlRow): string {
-  return r.sell?.at ?? r.buy?.at ?? "";
+  return r.sell?.at ?? r.listing?.at ?? r.buy?.at ?? "";
 }
 
 export function summarize(rows: PnlRow[]): PnlSummary {
   const s: PnlSummary = {
     soldCount: 0,
     holdingCount: 0,
+    listedCount: 0,
     unknownBuyCount: 0,
     realizedProfitCents: 0,
     investedSoldCents: 0,
     holdingCostCents: 0,
+    listedCostCents: 0,
+    listedAskCents: 0,
+    listedEstProfitCents: 0,
     winCount: 0,
     lossCount: 0,
   };
@@ -113,7 +182,12 @@ export function summarize(rows: PnlRow[]): PnlSummary {
     } else if (r.status === "holding" && r.buy) {
       s.holdingCount++;
       s.holdingCostCents += r.buy.priceCents;
-    } else if (r.status === "sold_unknown_buy") {
+    } else if (r.status === "listed" && r.buy && r.listing) {
+      s.listedCount++;
+      s.listedCostCents += r.buy.priceCents;
+      s.listedAskCents += r.listing.priceCents;
+      s.listedEstProfitCents += r.estProfitCents ?? 0;
+    } else if (r.status === "sold_unknown_buy" || r.status === "listed_unknown_buy") {
       s.unknownBuyCount++;
     }
   }

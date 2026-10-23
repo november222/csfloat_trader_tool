@@ -80,3 +80,35 @@ test("mua-bán-mua-bán cùng một món ghép đúng từng cặp", () => {
   const total = sold.reduce((a, r) => a + (r.profitCents ?? 0), 0);
   assert.equal(total, Math.round(1500 * 0.98) - 1000 + (Math.round(1600 * 0.98) - 1400));
 });
+
+test("món đã mua và đang rao trong stall là 'Đang bán', ước tính lãi/lỗ theo giá rao sau phí", () => {
+  const listing = {
+    listingId: "LIVE1",
+    priceCents: 12000,
+    at: "2026-01-10T00:00:00Z",
+    type: "buy_now",
+    item: item(0.2),
+  };
+  const rows = buildPnl([trade("1", "buyer", 10000, "2026-01-01T00:00:00Z")], 2, [listing]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "listed");
+  assert.equal(rows[0].netCents, Math.round(12000 * 0.98));
+  assert.equal(rows[0].estProfitCents, Math.round(12000 * 0.98) - 10000);
+  const s = summarize(rows);
+  assert.equal(s.listedCount, 1);
+  assert.equal(s.holdingCount, 0);
+  assert.equal(s.listedAskCents, 12000);
+});
+
+test("listing không có lệnh mua tương ứng được đánh dấu không rõ giá mua", () => {
+  const listing = {
+    listingId: "LIVE2",
+    priceCents: 5000,
+    at: "2026-01-10T00:00:00Z",
+    type: "buy_now",
+    item: item(0.77),
+  };
+  const rows = buildPnl([], 2, [listing]);
+  assert.equal(rows[0].status, "listed_unknown_buy");
+  assert.equal(summarize(rows).unknownBuyCount, 1);
+});

@@ -1,12 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { NormTrade, PnlRow, SurveyResult } from "@/lib/types";
+import type { NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
 import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 
 type SurveyState = SurveyResult | { error: string };
-type Filter = "all" | "sold" | "holding";
+type Filter = "all" | "sold" | "listed" | "holding";
+const FILTER_LABELS: Record<Filter, string> = {
+  all: "Tất cả",
+  sold: "Đã bán",
+  listed: "Đang bán",
+  holding: "Đang giữ",
+};
 
 const LS_KEY = "csf_api_key";
 const LS_TRADES = "csf_trades_cache";
@@ -34,6 +40,8 @@ export default function Home() {
   const [apiKey, setApiKey] = useState("");
   const [keyInput, setKeyInput] = useState("");
   const [trades, setTrades] = useState<NormTrade[]>([]);
+  const [listings, setListings] = useState<NormListing[]>([]);
+  const [stallError, setStallError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,9 +60,10 @@ export default function Home() {
       setApiKey(k);
       setKeyInput(k);
     }
-    const cached = readLS<{ trades: NormTrade[]; fetchedAt: string }>(LS_TRADES);
+    const cached = readLS<{ trades: NormTrade[]; listings?: NormListing[]; fetchedAt: string }>(LS_TRADES);
     if (cached) {
       setTrades(cached.trades);
+      setListings(cached.listings ?? []);
       setFetchedAt(cached.fetchedAt);
     }
     const s = readLS<Record<string, SurveyState>>(LS_SURVEYS);
@@ -87,8 +96,10 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `Lỗi ${res.status}`);
       setTrades(data.trades);
+      setListings(data.listings ?? []);
+      setStallError(data.stallError ?? null);
       setFetchedAt(data.fetchedAt);
-      writeLS(LS_TRADES, { trades: data.trades, fetchedAt: data.fetchedAt });
+      writeLS(LS_TRADES, { trades: data.trades, listings: data.listings ?? [], fetchedAt: data.fetchedAt });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được giao dịch.");
     } finally {
@@ -125,19 +136,21 @@ export default function Home() {
     }
   };
 
-  const rows = useMemo(() => buildPnl(trades, fee), [trades, fee]);
+  const rows = useMemo(() => buildPnl(trades, fee, listings), [trades, fee, listings]);
   const summary = useMemo(() => summarize(rows), [rows]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
-      if (filter === "sold" && r.status === "holding") return false;
+      if (filter === "sold" && r.status !== "sold" && r.status !== "sold_unknown_buy") return false;
+      if (filter === "listed" && r.status !== "listed" && r.status !== "listed_unknown_buy") return false;
       if (filter === "holding" && r.status !== "holding") return false;
       if (q && !r.item.marketHashName.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [rows, filter, query]);
 
+  const hasData = trades.length > 0 || listings.length > 0;
   const roi = summary.investedSoldCents > 0 ? (summary.realizedProfitCents / summary.investedSoldCents) * 100 : null;
 
   return (
@@ -169,7 +182,7 @@ export default function Home() {
             </button>
           )}
           <button onClick={loadTrades} disabled={loading}>
-            {loading ? "Đang tải…" : trades.length ? "Làm mới giao dịch" : "Tải giao dịch"}
+            {loading ? "Đang tải…" : hasData ? "Làm mới dữ liệu" : "Tải giao dịch & stall"}
           </button>
         </div>
         <div className="hint" style={{ marginTop: 8 }}>
@@ -179,8 +192,11 @@ export default function Home() {
       </section>
 
       {error && <div className="error">{error}</div>}
+      {stallError && (
+        <div className="error">Đã tải giao dịch nhưng không lấy được món đang bán trong stall: {stallError}</div>
+      )}
 
-      {trades.length > 0 && (
+      {hasData && (
         <>
           <section className="stats">
             <div className="stat">
@@ -200,6 +216,16 @@ export default function Home() {
               </div>
             </div>
             <div className="stat">
+              <div className="label">Đang bán (stall)</div>
+              <div className="value">{summary.listedCount}</div>
+              <div className="note">
+                Rao {usd(summary.listedAskCents)} · ước tính{" "}
+                <span className={signClass(summary.listedEstProfitCents)}>
+                  {signedUsd(summary.listedEstProfitCents)}
+                </span>
+              </div>
+            </div>
+            <div className="stat">
               <div className="label">Đang giữ</div>
               <div className="value">{summary.holdingCount}</div>
               <div className="note">Vốn: {usd(summary.holdingCostCents)}</div>
@@ -213,9 +239,9 @@ export default function Home() {
 
           <div className="toolbar">
             <div className="tabs">
-              {(["all", "sold", "holding"] as Filter[]).map((f) => (
+              {(Object.keys(FILTER_LABELS) as Filter[]).map((f) => (
                 <button key={f} className={`tab ${filter === f ? "active" : ""}`} onClick={() => setFilter(f)}>
-                  {f === "all" ? "Tất cả" : f === "sold" ? "Đã bán" : "Đang giữ"}
+                  {FILTER_LABELS[f]}
                 </button>
               ))}
             </div>
@@ -269,8 +295,8 @@ export default function Home() {
         </>
       )}
 
-      {trades.length === 0 && !loading && !error && (
-        <div className="empty">Nhập API key rồi bấm “Tải giao dịch” để bắt đầu.</div>
+      {!hasData && !loading && !error && (
+        <div className="empty">Nhập API key rồi bấm “Tải giao dịch & stall” để bắt đầu.</div>
       )}
     </div>
   );
@@ -292,12 +318,16 @@ function ItemCard({
   onSurvey: () => void;
 }) {
   const img = imageUrl(row.item.iconUrl);
-  const link = listingLink(row.sell?.listingId ?? row.buy?.listingId);
+  const link = listingLink(row.listing?.listingId ?? row.sell?.listingId ?? row.buy?.listingId);
   const badge =
     row.status === "sold" ? (
       <span className="badge sold">Đã bán</span>
+    ) : row.status === "listed" ? (
+      <span className="badge listed">Đang bán</span>
     ) : row.status === "holding" ? (
       <span className="badge holding">Đang giữ</span>
+    ) : row.status === "listed_unknown_buy" ? (
+      <span className="badge listed">Đang bán · không rõ giá mua</span>
     ) : (
       <span className="badge unknown">Không rõ giá mua</span>
     );
@@ -317,8 +347,25 @@ function ItemCard({
 
         <div className="figures">
           <Fig k={`Giá mua${row.buy ? ` · ${dateStr(row.buy.at)}` : ""}`} v={usd(row.buy?.priceCents)} />
-          <Fig k={`Giá bán${row.sell ? ` · ${dateStr(row.sell.at)}` : ""}`} v={usd(row.sell?.priceCents)} />
-          {row.sell && <Fig k={`Thực nhận (−${fee}%)`} v={usd(row.netCents)} />}
+          {row.listing ? (
+            <>
+              <Fig k={`Giá đang rao · ${dateStr(row.listing.at)}`} v={usd(row.listing.priceCents)} />
+              <Fig k={`Nếu bán được (−${fee}%)`} v={usd(row.netCents)} />
+              {row.estProfitCents != null && (
+                <div className="fig">
+                  <div className="k">Lãi/lỗ ước tính</div>
+                  <div className={`v ${signClass(row.estProfitCents)}`}>
+                    {signedUsd(row.estProfitCents)} ({pct(row.estProfitPct)})
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <Fig k={`Giá bán${row.sell ? ` · ${dateStr(row.sell.at)}` : ""}`} v={usd(row.sell?.priceCents)} />
+              {row.sell && <Fig k={`Thực nhận (−${fee}%)`} v={usd(row.netCents)} />}
+            </>
+          )}
           {row.status === "sold" && (
             <div className="fig">
               <div className="k">Lãi/lỗ</div>
@@ -365,7 +412,7 @@ function SurveyBox({ survey, row, fee }: { survey: SurveyResult; row: PnlRow; fe
       </div>
     );
   }
-  const holdingCost = row.status === "holding" ? row.buy?.priceCents ?? null : null;
+  const holdingCost = row.status === "holding" || row.status === "listed" ? row.buy?.priceCents ?? null : null;
   const estProfit =
     holdingCost != null && survey.medianCents != null
       ? netAfterFee(survey.medianCents, fee) - holdingCost
