@@ -3,6 +3,7 @@ import { runSurvey } from "@/lib/csfloat";
 import { errorResponse, resolveKey } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "icn1"; // ghim một vùng để giảm số IP khác nhau mà CSFloat nhìn thấy
 
 /** Khảo giá một món: chỉ chạy khi người dùng bấm nút, mỗi lần đúng 1 request tới CSFloat. */
 export async function GET(req: Request) {
