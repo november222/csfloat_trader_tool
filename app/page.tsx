@@ -366,7 +366,11 @@ export default function Home() {
       if (e instanceof ApiError && e.status === 429) {
         setCooldownUntil(Date.now() + (e.retryAfter ?? 60) * 1000);
       }
-      const msg = e instanceof Error ? e.message : "Khảo giá thất bại.";
+      let msg = e instanceof Error ? e.message : "Khảo giá thất bại.";
+      if (e instanceof ApiError && e.status === 429) {
+        msg +=
+          " Đợi lâu hơn thường không giúp: CSFloat đang chặn riêng endpoint /listings với IP của server Vercel (các mục khác vẫn dùng được). Cách chắc chắn là chạy ứng dụng trên máy của bạn (npm run dev), khi đó mọi request đi từ một IP nhà bạn.";
+      }
       setSurveys((prev) => ({
         ...prev,
         [row.key]: { error: msg, detail: e instanceof ApiError ? e.detail : null },
