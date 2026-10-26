@@ -1,14 +1,13 @@
-/** Xử lý dữ liệu kho đồ Steam (CS2: appid 730, contextid 2). Phần thuần, không gọi mạng. */
+/** Kho đồ CS2 lấy từ CSFloat (GET /me/inventory). Phần thuần, không gọi mạng. */
 
 export interface InvItem {
   assetId: string;
   name: string; // market_hash_name
   iconUrl: string | null;
-  tradable: boolean;
-  marketable: boolean;
-  type: string | null;
-  /** Thời điểm hết khoá giao dịch (ISO), nếu Steam báo */
-  tradableAfter: string | null;
+  floatValue: number | null;
+  paintSeed: number | null;
+  /** ID listing nếu món này đang được rao trong stall CSFloat của bạn */
+  listingId: string | null;
 }
 
 export type InvSource = "csfloat" | "other";
@@ -19,42 +18,31 @@ export interface ClassifiedItem extends InvItem {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
-export interface InventoryPage {
-  items: InvItem[];
-  more: boolean;
-  lastAssetId: string | null;
-  total: number | null;
-}
-
-/** Chuyển JSON của endpoint kho đồ Steam thành danh sách món. Trả về null nếu không phải dữ liệu kho đồ hợp lệ. */
-export function normalizeInventory(data: Any): InventoryPage | null {
-  if (!data || typeof data !== "object" || !Array.isArray(data.assets)) return null;
-  const descs = new Map<string, Any>();
-  for (const d of Array.isArray(data.descriptions) ? data.descriptions : []) {
-    descs.set(`${d.classid}_${d.instanceid}`, d);
-  }
-  const items: InvItem[] = [];
-  for (const a of data.assets) {
-    if (a?.appid != null && Number(a.appid) !== 730) continue;
-    const d = descs.get(`${a.classid}_${a.instanceid}`);
-    if (!d) continue;
-    const exp = typeof d.cache_expiration === "string" ? d.cache_expiration : null;
-    items.push({
-      assetId: String(a.assetid),
-      name: String(d.market_hash_name ?? d.name ?? "Unknown item"),
-      iconUrl: typeof d.icon_url === "string" ? d.icon_url : null,
-      tradable: Number(d.tradable) === 1,
-      marketable: Number(d.marketable) === 1,
-      type: typeof d.type === "string" ? d.type : null,
-      tradableAfter: exp && !Number.isNaN(Date.parse(exp)) && Date.parse(exp) > Date.now() ? exp : null,
+/** Chuyển JSON của /me/inventory thành danh sách món. Chấp nhận mảng trần hoặc đối tượng có `data`. */
+export function normalizeCsfloatInventory(data: Any): InvItem[] | null {
+  const list: Any[] | null = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.inventory)
+        ? data.inventory
+        : null;
+  if (!list) return null;
+  const out: InvItem[] = [];
+  for (const raw of list) {
+    // Một số phản hồi bọc món đồ trong `item`
+    const it = raw?.item && typeof raw.item === "object" ? { ...raw.item, listing_id: raw.listing_id ?? raw.item.listing_id } : raw;
+    if (!it || it.asset_id == null) continue;
+    out.push({
+      assetId: String(it.asset_id),
+      name: String(it.market_hash_name ?? it.item_name ?? "Unknown item"),
+      iconUrl: typeof it.icon_url === "string" ? it.icon_url : null,
+      floatValue: typeof it.float_value === "number" ? it.float_value : null,
+      paintSeed: typeof it.paint_seed === "number" ? it.paint_seed : null,
+      listingId: it.listing_id != null && it.listing_id !== "" ? String(it.listing_id) : null,
     });
   }
-  return {
-    items,
-    more: Number(data.more_items) === 1,
-    lastAssetId: data.last_assetid != null ? String(data.last_assetid) : null,
-    total: typeof data.total_inventory_count === "number" ? data.total_inventory_count : null,
-  };
+  return out;
 }
 
 /** Nhận SteamID64 (17 chữ số) hoặc link trang cá nhân dạng /profiles/<id>. Link dạng /id/<tên> thì trả về null. */
@@ -65,26 +53,36 @@ export function parseSteamId(input: string): string | null {
   return m ? m[1] : null;
 }
 
+export interface HoldingInfo {
+  name: string;
+  floatValue: number | null;
+  count: number;
+}
+
 /**
- * Đối chiếu kho đồ với các món CSFloat đang giữ/đang rao (đếm theo tên).
- * - Mỗi tên: số bản "khớp CSFloat" tối đa bằng số món đang giữ/đang rao của tên đó, phần còn lại là "ngoài CSFloat".
- * - `missing`: món CSFloat ghi là đang giữ/đang rao nhưng không thấy đủ trong kho (có thể đã bán ở nơi khác).
+ * Đối chiếu kho đồ với các món CSFloat ghi là đang giữ / đang rao / đang chờ xác nhận (khoá = tên + float + pattern).
+ * - `csfloat`: món trong kho khớp một món trong lịch sử CSFloat (mỗi món lịch sử chỉ khớp một bản).
+ * - `other`: món trong kho không có lệnh mua tương ứng trên CSFloat.
+ * - `missing`: món CSFloat ghi là đang giữ nhưng không thấy trong kho (đã bán ở nơi khác, hoặc còn trong thời gian chờ xác nhận).
  */
 export function classifyInventory(
   items: InvItem[],
-  holdingCounts: Record<string, number>,
-): { items: ClassifiedItem[]; missing: { name: string; count: number }[] } {
-  const remaining: Record<string, number> = { ...holdingCounts };
+  holding: Record<string, HoldingInfo>,
+  keyOf: (it: InvItem) => string,
+): { items: ClassifiedItem[]; missing: HoldingInfo[] } {
+  const remaining: Record<string, number> = {};
+  for (const [k, h] of Object.entries(holding)) remaining[k] = h.count;
   const out: ClassifiedItem[] = items.map((it) => {
-    if ((remaining[it.name] ?? 0) > 0) {
-      remaining[it.name]--;
+    const k = keyOf(it);
+    if ((remaining[k] ?? 0) > 0) {
+      remaining[k]--;
       return { ...it, source: "csfloat" as const };
     }
     return { ...it, source: "other" as const };
   });
   const missing = Object.entries(remaining)
     .filter(([, n]) => n > 0)
-    .map(([name, count]) => ({ name, count }))
+    .map(([k, n]) => ({ name: holding[k].name, floatValue: holding[k].floatValue, count: n }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return { items: out, missing };
 }

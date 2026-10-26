@@ -1,5 +1,6 @@
 import type { NormListing, NormTrade, Role, SurveyResult, TradeItem } from "./types";
 import { buildSurvey, floatRange } from "./survey";
+import { normalizeCsfloatInventory, type InvItem } from "./inventory";
 
 export const CSFLOAT_BASE = "https://csfloat.com/api/v1";
 
@@ -330,4 +331,14 @@ export async function fetchPendingTrades(apiKey: string, steamId: string, maxPag
     await sleep(PAGE_GAP_MS);
   }
   return out;
+}
+
+/** Lấy kho đồ CS2 của bạn qua CSFloat (món có thể giao dịch; món đang rao trong stall có listing_id). */
+export async function fetchInventory(apiKey: string): Promise<InvItem[]> {
+  const data = await csfloatGet("/me/inventory", apiKey);
+  const items = normalizeCsfloatInventory(data);
+  if (!items) {
+    throw new CsfloatError(502, "CSFloat trả về dữ liệu kho đồ không đúng định dạng dự kiến.");
+  }
+  return items;
 }

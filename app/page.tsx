@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
-import { buildPnl, netAfterFee, summarize } from "@/lib/pnl";
+import { buildPnl, itemKeyOf, netAfterFee, summarize } from "@/lib/pnl";
+import type { HoldingInfo } from "@/lib/inventory";
 import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import Inventory from "./Inventory";
@@ -17,7 +18,7 @@ import {
 } from "@/lib/csfloat";
 import { SORT_LABELS, sortRows, type SortDir, type SortKey } from "@/lib/sort";
 
-type SurveyState = SurveyResult | { error: string };
+type SurveyState = SurveyResult | { error: string; detail?: ErrorDetail | null };
 type Filter = "all" | "sold" | "listed" | "pending" | "holding";
 const FILTER_LABELS: Record<Filter, string> = {
   all: "Tất cả",
@@ -366,7 +367,10 @@ export default function Home() {
         setCooldownUntil(Date.now() + (e.retryAfter ?? 60) * 1000);
       }
       const msg = e instanceof Error ? e.message : "Khảo giá thất bại.";
-      setSurveys((prev) => ({ ...prev, [row.key]: { error: msg } }));
+      setSurveys((prev) => ({
+        ...prev,
+        [row.key]: { error: msg, detail: e instanceof ApiError ? e.detail : null },
+      }));
     } finally {
       lastSurveyAt.current = Date.now();
       setSurveying(null);
@@ -419,9 +423,9 @@ export default function Home() {
 
   const hasData = trades.length > 0 || listings.length > 0;
 
-  // Số món đang giữ/đang rao theo tên, dùng để đối chiếu với kho đồ Steam
-  const holdingCounts = useMemo(() => {
-    const c: Record<string, number> = {};
+  // Các món CSFloat ghi là đang giữ/đang rao/chờ xác nhận (khoá = tên + float + pattern), để đối chiếu với kho đồ
+  const holding = useMemo(() => {
+    const c: Record<string, HoldingInfo> = {};
     for (const r of rows) {
       if (
         r.status === "holding" ||
@@ -429,7 +433,9 @@ export default function Home() {
         r.status === "listed_unknown_buy" ||
         r.status === "pending_buy"
       ) {
-        c[r.item.marketHashName] = (c[r.item.marketHashName] ?? 0) + 1;
+        const k = itemKeyOf(r.item);
+        if (c[k]) c[k].count++;
+        else c[k] = { name: r.item.marketHashName, floatValue: r.item.floatValue, count: 1 };
       }
     }
     return c;
@@ -456,7 +462,7 @@ export default function Home() {
       </div>
 
       {view === "inventory" && (
-        <Inventory steamId={steamId} onSteamId={updateSteamId} holdingCounts={holdingCounts} hasTrades={hasData} />
+        <Inventory apiKey={apiKey} holding={holding} hasTrades={hasData} />
       )}
 
       {view === "trades" && (
@@ -864,7 +870,19 @@ function ItemCard({
 
         {canManualSell && <ManualSellEditor current={currentManualSell} defaultFee={fee} onSave={onManualSell} />}
 
-        {survey && "error" in survey && <div className="error" style={{ marginTop: 10, marginBottom: 0 }}>{survey.error}</div>}
+        {survey && "error" in survey && (
+          <div className="error" style={{ marginTop: 10, marginBottom: 0 }}>
+            {survey.error}
+            {survey.detail && (
+              <details style={{ marginTop: 6 }}>
+                <summary style={{ cursor: "pointer" }}>Chi tiết kỹ thuật</summary>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 12, margin: "6px 0 0" }}>
+                  {JSON.stringify(survey.detail, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        )}
         {survey && !("error" in survey) && <SurveyBox survey={survey} row={row} fee={fee} />}
       </div>
     </div>

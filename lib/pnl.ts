@@ -1,13 +1,14 @@
 import type { ManualSell, NormListing, NormTrade, PnlRow, PnlSummary, TradeItem } from "./types";
 
-function keyOf(item: TradeItem): string {
+/** Khoá để ghép cùng một món: tên + float + pattern seed. */
+export function itemKeyOf(item: Pick<TradeItem, "marketHashName" | "floatValue" | "paintSeed">): string {
   const f = item.floatValue == null ? "nofloat" : item.floatValue.toFixed(12);
   return `${item.marketHashName}|${f}|${item.paintSeed ?? ""}`;
 }
 
 /** Khoá để ghép lệnh mua, lệnh bán và listing của cùng một món (asset_id đổi sau mỗi lần trade nên dùng float + pattern). */
 export function itemKey(t: NormTrade): string {
-  return keyOf(t.item);
+  return itemKeyOf(t.item);
 }
 
 /** Số tiền nhận được sau khi người bán chịu phí (mặc định 2%). */
@@ -86,7 +87,7 @@ export function buildPnl(
     else map.set(k, [t]);
   }
   for (const l of [...listings].sort((a, b) => a.at.localeCompare(b.at))) {
-    const k = keyOf(l.item);
+    const k = itemKeyOf(l.item);
     const list = stall.get(k);
     if (list) list.push(l);
     else stall.set(k, [l]);
