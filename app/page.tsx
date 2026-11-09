@@ -450,10 +450,10 @@ export default function Home() {
     <div className="container">
       <header className="top">
         <div>
-          <h1>CSFloat Trader Tool</h1>
-          <div className="sub">Lãi/lỗ sau phí {fee}% · khảo giá theo float khi bạn bấm nút</div>
+          <h1>CSFloat Trader</h1>
+          <div className="sub">Lãi/lỗ sau phí {fee}%</div>
         </div>
-        {fetchedAt && <div className="hint">Cập nhật: {new Date(fetchedAt).toLocaleString("vi-VN")}</div>}
+        {fetchedAt && <div className="hint">Cập nhật {new Date(fetchedAt).toLocaleString("vi-VN")}</div>}
       </header>
 
       <div className="view-tabs">
@@ -726,6 +726,38 @@ export default function Home() {
   );
 }
 
+const WEAR_BANDS = [
+  { id: "FN", from: 0, to: 0.07 },
+  { id: "MW", from: 0.07, to: 0.15 },
+  { id: "FT", from: 0.15, to: 0.38 },
+  { id: "WW", from: 0.38, to: 0.45 },
+  { id: "BS", from: 0.45, to: 1 },
+];
+
+/** Thanh độ mòn: 5 dải FN/MW/FT/WW/BS theo đúng khoảng float, con trỏ chỉ vị trí float của món. */
+function WearBar({ float }: { float: number | null }) {
+  if (float == null) return null;
+  const f = Math.min(1, Math.max(0, float));
+  const active = WEAR_BANDS.find((b) => f < b.to) ?? WEAR_BANDS[WEAR_BANDS.length - 1];
+  return (
+    <div className="wear" title={`Float ${float}`}>
+      <div className="wear-track">
+        {WEAR_BANDS.map((b) => (
+          <span
+            key={b.id}
+            className={`wear-seg ${b.id === active.id ? "on" : ""}`}
+            style={{ width: `${(b.to - b.from) * 100}%` }}
+          />
+        ))}
+        <span className="wear-pin" style={{ left: `${f * 100}%` }} />
+      </div>
+      <div className="wear-txt">
+        <b>{active.id}</b> {floatStr(float)}
+      </div>
+    </div>
+  );
+}
+
 function ItemCard({
   row,
   fee,
@@ -782,7 +814,7 @@ function ItemCard({
     );
 
   return (
-    <div className="item">
+    <div className={`item st-${row.status}`}>
       <div className="img">{img ? <img src={img} alt={row.item.marketHashName} loading="lazy" /> : null}</div>
       <div>
         <div className="name">
@@ -790,9 +822,9 @@ function ItemCard({
           {badge}
         </div>
         <div className="meta">
-          Float {floatStr(row.item.floatValue)}
-          {row.item.paintSeed != null ? ` · Seed ${row.item.paintSeed}` : ""}
+          {row.item.paintSeed != null ? `Seed ${row.item.paintSeed}` : ""}
         </div>
+        <WearBar float={row.item.floatValue} />
         {pendingTrade && (
           <div className="meta" style={{ color: "var(--amber)" }}>
             Đang chờ xác nhận
