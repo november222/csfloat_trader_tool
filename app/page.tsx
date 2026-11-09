@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
 import { buildPnl, itemKeyOf, netAfterFee, summarize } from "@/lib/pnl";
 import type { HoldingInfo } from "@/lib/inventory";
-import { dateStr, floatStr, imageUrl, listingLink, pct, signClass, signedUsd, usd } from "@/lib/format";
+import { dateStr, floatStr, imageUrl, listingLink, searchLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import Inventory from "./Inventory";
 import {
@@ -708,6 +708,7 @@ export default function Home() {
                 busy={surveying === row.key}
                 disabled={surveying !== null || cooldown > 0 || loading}
                 onSurvey={() => survey(row)}
+                tol={tol}
                 onManual={(cents) => setManual(row.key, cents)}
                 onManualSell={(ms) => setManualSell(row.key, ms)}
               />
@@ -732,6 +733,7 @@ function ItemCard({
   busy,
   disabled,
   onSurvey,
+  tol,
   onManual,
   onManualSell,
 }: {
@@ -741,6 +743,7 @@ function ItemCard({
   busy: boolean;
   disabled: boolean;
   onSurvey: () => void;
+  tol: number;
   onManual: (cents: number | null) => void;
   onManualSell: (ms: ManualSell | null) => void;
 }) {
@@ -855,9 +858,16 @@ function ItemCard({
         </div>
 
         <div className="actions">
-          <button className="small" onClick={onSurvey} disabled={disabled || row.item.floatValue == null}>
-            {busy ? "Đang khảo giá…" : survey && !("error" in survey) ? "Khảo giá lại" : "Khảo giá"}
-          </button>
+          {row.item.floatValue != null && (
+            <a
+              className="btn small"
+              href={searchLink(row.item.marketHashName, row.item.floatValue, tol)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Khảo giá trên CSFloat ↗
+            </a>
+          )}
           {link && (
             <a href={link} target="_blank" rel="noopener noreferrer">
               Mở trên CSFloat ↗
@@ -874,19 +884,6 @@ function ItemCard({
 
         {canManualSell && <ManualSellEditor current={currentManualSell} defaultFee={fee} onSave={onManualSell} />}
 
-        {survey && "error" in survey && (
-          <div className="error" style={{ marginTop: 10, marginBottom: 0 }}>
-            {survey.error}
-            {survey.detail && (
-              <details style={{ marginTop: 6 }}>
-                <summary style={{ cursor: "pointer" }}>Chi tiết kỹ thuật</summary>
-                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 12, margin: "6px 0 0" }}>
-                  {JSON.stringify(survey.detail, null, 2)}
-                </pre>
-              </details>
-            )}
-          </div>
-        )}
         {survey && !("error" in survey) && <SurveyBox survey={survey} row={row} fee={fee} />}
       </div>
     </div>

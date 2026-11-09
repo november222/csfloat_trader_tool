@@ -39,3 +39,15 @@ export function signClass(v: number | null | undefined): string {
   if (v == null || v === 0) return "neu";
   return v > 0 ? "pos" : "neg";
 }
+
+/** Trang tìm kiếm CSFloat đã lọc sẵn theo tên + khoảng float (mở bằng trình duyệt của bạn, không qua server). */
+export function searchLink(name: string, float: number, tol: number): string {
+  const q = new URLSearchParams({
+    market_hash_name: name,
+    min_float: String(Math.max(0, float - tol)),
+    max_float: String(Math.min(1, float + tol)),
+    sort_by: "lowest_price",
+    type: "buy_now",
+  });
+  return `https://csfloat.com/search?${q.toString()}`;
+}
