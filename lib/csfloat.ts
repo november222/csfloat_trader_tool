@@ -59,7 +59,7 @@ export async function csfloatGet(path: string, apiKey: string): Promise<unknown>
     try {
       res = await fetch(`${CSFLOAT_BASE}${path}`, {
         headers: {
-          Authorization: apiKey,
+          ...(apiKey ? { Authorization: apiKey } : {}),
           Accept: "application/json",
           // Trình duyệt không cho tự đặt User-Agent; chỉ đặt khi chạy ở server
           ...(typeof window === "undefined" ? { "User-Agent": "csfloat-trader-tool/1.0" } : {}),
@@ -255,7 +255,15 @@ export async function fetchSimilarListings(
 /** Khảo giá một món: đúng 1 request tới CSFloat. Chạy được ở cả server lẫn trình duyệt. */
 export async function runSurvey(apiKey: string, marketHashName: string, float: number, tol: number): Promise<SurveyResult> {
   const { floatMin, floatMax } = floatRange(float, tol);
-  const listings = await fetchSimilarListings(apiKey, { marketHashName, minFloat: floatMin, maxFloat: floatMax });
+  const opts = { marketHashName, minFloat: floatMin, maxFloat: floatMax };
+  let listings: RawListing[];
+  try {
+    // Listing công khai: thử không gửi API key trước, vì CSFloat chặn "too many IPs" theo key.
+    listings = await fetchSimilarListings("", opts);
+  } catch (e) {
+    if (!(e instanceof CsfloatError) || !apiKey) throw e;
+    listings = await fetchSimilarListings(apiKey, opts);
+  }
   return buildSurvey(listings, float, tol);
 }
 
