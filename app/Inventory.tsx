@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import { classifyInventory, type HoldingInfo, type InvItem, type InvSource } from "@/lib/inventory";
 import { itemKeyOf } from "@/lib/pnl";
-import { floatStr, imageUrl, listingLink } from "@/lib/format";
+import { floatStr, listingLink } from "@/lib/format";
+import SkinImage from "./SkinImage";
 
 const LS_INV = "csf_inventory_cache2"; // dữ liệu kho đồ lấy từ CSFloat
 const PAGE_SIZE = 60;
@@ -252,11 +253,10 @@ export default function Inventory({
             <>
               <div className="inv-grid">
                 {visible.slice(0, shown).map((it) => {
-                  const img = imageUrl(it.iconUrl);
                   const link = listingLink(it.listingId);
                   return (
                     <div className="inv-card" key={it.assetId}>
-                      <div className="img">{img ? <img src={img} alt={it.name} loading="lazy" /> : null}</div>
+                      <div className="img"><SkinImage iconUrl={it.iconUrl} alt={it.name} /></div>
                       <div className="name">{it.name}</div>
                       <div className="meta">
                         {it.floatValue != null ? `Float ${floatStr(it.floatValue)}` : "Không có float"}

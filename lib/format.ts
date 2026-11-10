@@ -51,3 +51,17 @@ export function searchLink(name: string, float: number, tol: number): string {
   });
   return `https://csfloat.com/search?${q.toString()}`;
 }
+
+/** Danh sách URL ảnh để thử lần lượt (CDN Steam đôi khi thiếu ảnh ở một máy chủ hoặc một kích thước). */
+export function imageCandidates(iconUrl: string | null | undefined): string[] {
+  if (!iconUrl) return [];
+  if (iconUrl.startsWith("http")) return [iconUrl];
+  const hosts = [
+    "community.cloudflare.steamstatic.com",
+    "community.fastly.steamstatic.com",
+    "community.akamai.steamstatic.com",
+  ];
+  const out = hosts.map((h) => `https://${h}/economy/image/${iconUrl}/256fx256f`);
+  out.push(`https://${hosts[0]}/economy/image/${iconUrl}/360fx360f`, `https://${hosts[0]}/economy/image/${iconUrl}`);
+  return out;
+}

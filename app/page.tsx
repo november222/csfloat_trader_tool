@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
 import { buildPnl, itemKeyOf, netAfterFee, summarize } from "@/lib/pnl";
 import { findGoneRowKeys, type HoldingInfo, type InvItem } from "@/lib/inventory";
-import { dateStr, floatStr, imageUrl, listingLink, searchLink, pct, signClass, signedUsd, usd } from "@/lib/format";
+import { dateStr, floatStr, listingLink, searchLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import Inventory from "./Inventory";
+import SkinImage from "./SkinImage";
 import {
   CsfloatError,
   NetworkError,
@@ -892,7 +893,6 @@ function ItemCard({
     row.manualSell && row.sell
       ? { priceCents: row.sell.priceCents, feePct: row.sellFeePct ?? fee, platform: row.sellPlatform ?? null }
       : null;
-  const img = imageUrl(row.item.iconUrl);
   const link = listingLink(row.listing?.listingId ?? row.sell?.listingId ?? row.buy?.listingId);
   const badge =
     row.status === "sold" ? (
@@ -915,7 +915,7 @@ function ItemCard({
 
   return (
     <div className={`item st-${row.status}`}>
-      <div className="img">{img ? <img src={img} alt={row.item.marketHashName} loading="lazy" /> : null}</div>
+      <div className="img"><SkinImage iconUrl={row.item.iconUrl} alt={row.item.marketHashName} /></div>
       <div>
         <div className="name">
           {row.item.marketHashName}
