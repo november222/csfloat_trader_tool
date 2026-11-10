@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyInventory, normalizeCsfloatInventory, parseSteamId, type InvItem } from "../lib/inventory.ts";
+import { findGoneRowKeys, classifyInventory, normalizeCsfloatInventory, parseSteamId, type InvItem } from "../lib/inventory.ts";
 
 test("parseSteamId nhận SteamID64 và link /profiles/, từ chối link /id/ và chuỗi sai", () => {
   assert.equal(parseSteamId("76561198000000000"), "76561198000000000");
@@ -51,4 +51,27 @@ test("classifyInventory khớp theo tên + float: cùng tên khác float không 
   const { items, missing } = classifyInventory(inv, holding, keyOf);
   assert.deepEqual(items.map((x) => x.source), ["csfloat", "other", "csfloat", "other", "other"]);
   assert.deepEqual(missing, [{ name: "Knife", floatValue: 0.05, count: 1 }]);
+});
+
+test("findGoneRowKeys: loại món không còn trong kho, giữ món mới mua và món còn trong kho", () => {
+  const keyOf = (x: { marketHashName: string; floatValue: number | null; paintSeed: number | null }) =>
+    `${x.marketHashName}|${x.floatValue ?? "n"}|${x.paintSeed ?? ""}`;
+  const now = Date.parse("2026-11-10T00:00:00Z");
+  const day = (n: number) => new Date(now - n * 86400000).toISOString();
+  const mk = (key: string, name: string, ageDays: number) => ({
+    key,
+    status: "holding",
+    item: { marketHashName: name, floatValue: null, paintSeed: null },
+    buy: { at: day(ageDays) },
+  });
+  const rows = [
+    mk("a", "Package", 20), // cũ nhất, kho chỉ có 1 bản -> mất
+    mk("b", "Package", 10), // còn trong kho
+    mk("c", "Case", 30), // không có trong kho -> mất
+    mk("d", "Case2", 2), // mới mua, còn khoá -> giữ
+  ];
+  const inv: InvItem[] = [{ assetId: "1", name: "Package", iconUrl: null, floatValue: null, paintSeed: null, listingId: null }];
+  const gone = findGoneRowKeys(rows, inv, keyOf, now);
+  assert.deepEqual([...gone].sort(), ["a", "c"]);
+  assert.equal(findGoneRowKeys(rows, [], keyOf, now).size, 0);
 });

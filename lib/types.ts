@@ -36,6 +36,7 @@ export interface NormListing {
 export type RowStatus =
   | "sold"
   | "holding"
+  | "gone" // có lệnh mua, không còn trong kho (đã mở/dùng, trade đi, hoặc bán nơi khác)
   | "listed"
   | "sold_unknown_buy"
   | "listed_unknown_buy"

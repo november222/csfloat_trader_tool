@@ -86,3 +86,53 @@ export function classifyInventory(
     .sort((a, b) => a.name.localeCompare(b.name));
   return { items: out, missing };
 }
+
+export interface GoneRowInput {
+  key: string;
+  status: string;
+  item: { marketHashName: string; floatValue: number | null; paintSeed: number | null };
+  buy: { at: string } | null;
+}
+
+/**
+ * Tìm các dòng "đang giữ" thực ra không còn trong kho (hòm đã mở, đã trade đi, bán ở nơi khác).
+ * - Với mỗi món (khoá = tên + float + pattern): số bản trong kho trừ đi số bản đang rao trong stall = số bản "đang giữ" còn tồn tại.
+ * - Số dòng "đang giữ" vượt quá số đó bị coi là không còn; dòng mua cũ nhất bị loại trước.
+ * - Món mới mua trong `graceDays` ngày được giữ nguyên vì còn khoá giao dịch nên CSFloat chưa liệt kê trong kho.
+ * - Kho rỗng (chưa tải hoặc lỗi) thì không loại món nào.
+ */
+export function findGoneRowKeys(
+  rows: GoneRowInput[],
+  inv: InvItem[],
+  keyOf: (x: GoneRowInput["item"]) => string,
+  nowMs: number,
+  graceDays = 9,
+): Set<string> {
+  const gone = new Set<string>();
+  if (inv.length === 0) return gone;
+  const invCount: Record<string, number> = {};
+  for (const it of inv) {
+    const k = keyOf({ marketHashName: it.name, floatValue: it.floatValue, paintSeed: it.paintSeed });
+    invCount[k] = (invCount[k] ?? 0) + 1;
+  }
+  const listed: Record<string, number> = {};
+  const holdByKey: Record<string, GoneRowInput[]> = {};
+  for (const r of rows) {
+    const k = keyOf(r.item);
+    if (r.status === "listed" || r.status === "listed_unknown_buy") listed[k] = (listed[k] ?? 0) + 1;
+    else if (r.status === "holding" && r.buy) (holdByKey[k] ??= []).push(r);
+  }
+  const graceMs = graceDays * 86400000;
+  for (const [k, list] of Object.entries(holdByKey)) {
+    const keep = Math.max(0, (invCount[k] ?? 0) - (listed[k] ?? 0));
+    // mới nhất trước: những món mới được giữ lại trước
+    list.sort((a, b) => Date.parse(b.buy!.at) - Date.parse(a.buy!.at));
+    list.forEach((r, i) => {
+      if (i < keep) return;
+      const t = Date.parse(r.buy!.at);
+      if (Number.isFinite(t) && nowMs - t < graceMs) return; // còn trong thời gian khoá giao dịch
+      gone.add(r.key);
+    });
+  }
+  return gone;
+}

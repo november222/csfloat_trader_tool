@@ -6,6 +6,7 @@ Trang web theo dõi các món đồ CS2 bạn đã **mua / bán** trên CSFloat,
 
 - Lấy lịch sử giao dịch đã hoàn tất (`/me/trades`, trạng thái `verified`) của bạn, cả vai trò người mua và người bán.
 - Ghép lệnh mua với lệnh bán của cùng một món (tên + float + pattern seed) để tính lãi/lỗ: `thực nhận = giá bán × (1 − phí)`, `lãi/lỗ = thực nhận − giá mua`. Phí mặc định 2%, chỉnh được trên giao diện.
+- **Đang giữ chính xác hơn**: sau khi tải Kho đồ, các dòng "đang giữ" không còn trong kho CSFloat (hòm đã mở, món đã trade đi, bán nơi khác) chuyển sang **Không còn trong kho** và không tính vào vốn đang giữ. Món mới mua trong 9 ngày được giữ nguyên vì còn khoá giao dịch. Nếu món vẫn còn nhưng chưa hiện trong kho, bấm "Vẫn đang giữ". Món không còn trong kho vẫn dùng được nút "Đã bán ở sàn khác?".
 - Phân loại: **Đã bán**, **Đang bán** (đang rao trong stall của bạn), **Đang giữ** (đã mua, chưa rao), **Không rõ giá mua** (bán/đang rao nhưng không thấy lệnh mua).
 - Món **Đang bán** hiện giá đang rao và lãi/lỗ ước tính nếu bán được đúng giá đó (sau phí). Stall được lấy bằng `/me` (lấy Steam ID) rồi `/listings?user_id=<steam_id>`; nếu bước này lỗi thì giao dịch vẫn hiển thị kèm thông báo.
 - Món **không rõ giá mua** có ô nhập giá mua (USD) ngay trên thẻ. Sau khi lưu, món được tính lãi/lỗ như bình thường (đánh dấu "Giá mua (nhập tay)") và có thể sửa hoặc xoá. Giá nhập tay chỉ lưu trong trình duyệt đang dùng (localStorage), không đồng bộ giữa các thiết bị.

@@ -36,10 +36,12 @@ export default function Inventory({
   apiKey,
   holding,
   hasTrades,
+  onItems,
 }: {
   apiKey: string;
   holding: Record<string, HoldingInfo>;
   hasTrades: boolean;
+  onItems?: (items: InvItem[]) => void;
 }) {
   const [items, setItems] = useState<InvItem[]>([]);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
@@ -71,6 +73,7 @@ export default function Inventory({
       const list: InvItem[] = data.items ?? [];
       const at = new Date().toISOString();
       setItems(list);
+      onItems?.(list);
       setFetchedAt(at);
       setShown(PAGE_SIZE);
       writeLS(LS_INV, { items: list, fetchedAt: at });

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ManualSell, NormListing, NormTrade, PnlRow, SurveyResult } from "@/lib/types";
 import { buildPnl, itemKeyOf, netAfterFee, summarize } from "@/lib/pnl";
-import type { HoldingInfo } from "@/lib/inventory";
+import { findGoneRowKeys, type HoldingInfo, type InvItem } from "@/lib/inventory";
 import { dateStr, floatStr, imageUrl, listingLink, searchLink, pct, signClass, signedUsd, usd } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import Inventory from "./Inventory";
@@ -19,14 +19,17 @@ import {
 import { SORT_LABELS, sortRows, type SortDir, type SortKey } from "@/lib/sort";
 
 type SurveyState = SurveyResult | { error: string; detail?: ErrorDetail | null };
-type Filter = "all" | "sold" | "listed" | "pending" | "holding";
+type Filter = "all" | "sold" | "listed" | "pending" | "holding" | "gone";
 const FILTER_LABELS: Record<Filter, string> = {
   all: "Tất cả",
   sold: "Đã bán",
   listed: "Đang bán",
   pending: "Chờ xác nhận",
   holding: "Đang giữ",
+  gone: "Không còn trong kho",
 };
+const LS_INV = "csf_inventory_cache2"; // dùng chung với mục Kho đồ
+const LS_KEEP = "csf_keep_overrides"; // dòng bạn xác nhận "vẫn đang giữ"
 
 const LS_KEY = "csf_api_key";
 const LS_TRADES = "csf_trades_cache";
@@ -124,6 +127,10 @@ export default function Home() {
   const [manualBuys, setManualBuys] = useState<Record<string, number>>({});
   const [manualSells, setManualSells] = useState<Record<string, ManualSell>>({});
   const lastSurveyAt = useRef(0);
+  const [invItems, setInvItems] = useState<InvItem[]>([]);
+  const [invLoading, setInvLoading] = useState(false);
+  const [invError, setInvError] = useState<string | null>(null);
+  const [keeps, setKeeps] = useState<Record<string, true>>({});
 
   // Nạp dữ liệu đã lưu trong trình duyệt khi mở trang
   useEffect(() => {
@@ -154,12 +161,48 @@ export default function Home() {
     if (m) setManualBuys(m);
     const ms = readLS<Record<string, ManualSell>>(LS_MANUAL_SELL);
     if (ms) setManualSells(ms);
+    const inv = readLS<{ items: InvItem[] }>(LS_INV);
+    if (inv?.items) setInvItems(inv.items);
+    const kp = readLS<Record<string, true>>(LS_KEEP);
+    if (kp) setKeeps(kp);
     const sid = readLS<string>(LS_STEAM_ID);
     if (sid) setSteamId(sid);
     const cm = readLS<CallMode>(LS_CALL_MODE);
     if (cm === "auto" || cm === "direct" || cm === "server") setCallMode(cm);
     directBlocked.current = readLS<boolean>(LS_DIRECT_BLOCKED) === true;
   }, []);
+
+  /** Tải kho đồ từ CSFloat để biết món nào thật sự còn giữ. */
+  const loadInv = async () => {
+    setInvLoading(true);
+    setInvError(null);
+    try {
+      const res = await fetch("/api/inventory", { headers: apiKey ? { "x-csfloat-key": apiKey } : {} });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setInvError(data?.error ?? `Lỗi ${res.status}`);
+        return;
+      }
+      const list: InvItem[] = data.items ?? [];
+      setInvItems(list);
+      writeLS(LS_INV, { items: list, fetchedAt: new Date().toISOString() });
+    } catch {
+      setInvError("Không kết nối được tới server.");
+    } finally {
+      setInvLoading(false);
+    }
+  };
+
+  /** Đánh dấu (hoặc bỏ đánh dấu) một dòng là "vẫn đang giữ" dù không thấy trong kho. */
+  const setKeep = (key: string, on: boolean) => {
+    setKeeps((prev) => {
+      const next = { ...prev };
+      if (on) next[key] = true;
+      else delete next[key];
+      writeLS(LS_KEEP, next);
+      return next;
+    });
+  };
 
   /** Lưu hoặc xoá (ms = null) giá bán nhập tay (bán ở sàn khác) của một dòng. */
   const setManualSell = (key: string, ms: ManualSell | null) => {
@@ -381,11 +424,28 @@ export default function Home() {
     }
   };
 
-  const rows = useMemo(
+  const rawRows = useMemo(
     () => buildPnl(trades, fee, listings, manualBuys, manualSells),
     [trades, fee, listings, manualBuys, manualSells],
   );
+  // "Đang giữ" chỉ đúng khi món còn trong kho: món đã mở/dùng, trade đi hoặc bán nơi khác chuyển sang "Không còn trong kho"
+  const rows = useMemo(() => {
+    const gone = findGoneRowKeys(rawRows, invItems, itemKeyOf, Date.now());
+    if (gone.size === 0) return rawRows;
+    return rawRows.map((r) => (gone.has(r.key) && !keeps[r.key] ? { ...r, status: "gone" as const } : r));
+  }, [rawRows, invItems, keeps]);
   const summary = useMemo(() => summarize(rows), [rows]);
+  const goneStats = useMemo(() => {
+    let count = 0;
+    let cost = 0;
+    for (const r of rows) {
+      if (r.status === "gone") {
+        count++;
+        cost += r.buy?.priceCents ?? 0;
+      }
+    }
+    return { count, cost };
+  }, [rows]);
 
   // Lọc theo trạng thái + tên trước; số lượng từng loại vật phẩm tính trên tập này
   const baseFiltered = useMemo(() => {
@@ -395,6 +455,7 @@ export default function Home() {
       if (filter === "listed" && r.status !== "listed" && r.status !== "listed_unknown_buy") return false;
       if (filter === "pending" && r.status !== "pending_buy" && r.status !== "pending_sell") return false;
       if (filter === "holding" && r.status !== "holding") return false;
+      if (filter === "gone" && r.status !== "gone") return false;
       if (q && !r.item.marketHashName.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -433,6 +494,7 @@ export default function Home() {
     for (const r of rows) {
       if (
         r.status === "holding" ||
+        r.status === "gone" ||
         r.status === "listed" ||
         r.status === "listed_unknown_buy" ||
         r.status === "pending_buy"
@@ -466,7 +528,7 @@ export default function Home() {
       </div>
 
       {view === "inventory" && (
-        <Inventory apiKey={apiKey} holding={holding} hasTrades={hasData} />
+        <Inventory apiKey={apiKey} holding={holding} hasTrades={hasData} onItems={setInvItems} />
       )}
 
       {view === "trades" && (
@@ -596,7 +658,10 @@ export default function Home() {
             <div className="stat">
               <div className="label">Đang giữ</div>
               <div className="value">{summary.holdingCount}</div>
-              <div className="note">Vốn: {usd(summary.holdingCostCents)}</div>
+              <div className="note">
+                Vốn: {usd(summary.holdingCostCents)}
+                {goneStats.count > 0 && ` · ${goneStats.count} món không còn trong kho`}
+              </div>
             </div>
             <div className="stat">
               <div className="label">Không rõ giá mua</div>
@@ -607,7 +672,9 @@ export default function Home() {
 
           <div className="toolbar">
             <div className="tabs">
-              {(Object.keys(FILTER_LABELS) as Filter[]).map((f) => (
+              {(Object.keys(FILTER_LABELS) as Filter[])
+                .filter((f) => f !== "gone" || goneStats.count > 0 || filter === "gone")
+                .map((f) => (
                 <button key={f} className={`tab ${filter === f ? "active" : ""}`} onClick={() => setFilter(f)}>
                   {FILTER_LABELS[f]}
                 </button>
@@ -696,6 +763,31 @@ export default function Home() {
             </section>
           )}
 
+          {(filter === "holding" || filter === "gone" || filter === "all") && rawRows.some((r) => r.status === "holding" || r.status === "gone") && (
+            <div className="panel" style={{ padding: 10 }}>
+              {invItems.length === 0 ? (
+                <div className="row-inline">
+                  <span className="hint">
+                    “Đang giữ” hiện chỉ nghĩa là chưa thấy lệnh bán. Tải kho đồ CSFloat để loại các món đã mở, đã trade hoặc bán nơi khác.
+                  </span>
+                  <button className="small" onClick={loadInv} disabled={invLoading || !apiKey}>
+                    {invLoading ? "Đang tải…" : "Tải kho đồ"}
+                  </button>
+                </div>
+              ) : (
+                <div className="row-inline">
+                  <span className="hint">
+                    Đối chiếu với kho đồ ({invItems.length} món). Món mới mua trong 9 ngày được giữ nguyên vì còn khoá giao dịch.
+                  </span>
+                  <button className="small ghost" onClick={loadInv} disabled={invLoading || !apiKey}>
+                    {invLoading ? "Đang tải…" : "Làm mới kho đồ"}
+                  </button>
+                </div>
+              )}
+              {invError && <div className="hint" style={{ color: "var(--red)", marginTop: 6 }}>{invError}</div>}
+            </div>
+          )}
+
           {visible.length === 0 ? (
             <div className="empty">Không có món nào khớp bộ lọc.</div>
           ) : (
@@ -708,6 +800,8 @@ export default function Home() {
                 busy={surveying === row.key}
                 disabled={surveying !== null || cooldown > 0 || loading}
                 onSurvey={() => survey(row)}
+                onKeep={(on) => setKeep(row.key, on)}
+                kept={!!keeps[row.key]}
                 tol={tol}
                 onManual={(cents) => setManual(row.key, cents)}
                 onManualSell={(ms) => setManualSell(row.key, ms)}
@@ -765,6 +859,8 @@ function ItemCard({
   busy,
   disabled,
   onSurvey,
+  onKeep,
+  kept,
   tol,
   onManual,
   onManualSell,
@@ -775,6 +871,8 @@ function ItemCard({
   busy: boolean;
   disabled: boolean;
   onSurvey: () => void;
+  onKeep: (on: boolean) => void;
+  kept: boolean;
   tol: number;
   onManual: (cents: number | null) => void;
   onManualSell: (ms: ManualSell | null) => void;
@@ -789,7 +887,7 @@ function ItemCard({
   const endsMs = endsAt ? Date.parse(endsAt) : NaN;
   const daysLeft = Number.isNaN(endsMs) ? null : Math.max(0, Math.ceil((endsMs - Date.now()) / 86400000));
   // Cho phép nhập giá bán ở sàn khác với món đã biết giá mua mà chưa bán trên CSFloat (hoặc đã nhập tay trước đó)
-  const canManualSell = ((row.status === "holding" || row.status === "listed") && row.buy != null) || !!row.manualSell;
+  const canManualSell = ((row.status === "holding" || row.status === "gone" || row.status === "listed") && row.buy != null) || !!row.manualSell;
   const currentManualSell: ManualSell | null =
     row.manualSell && row.sell
       ? { priceCents: row.sell.priceCents, feePct: row.sellFeePct ?? fee, platform: row.sellPlatform ?? null }
@@ -803,6 +901,8 @@ function ItemCard({
       <span className="badge listed">Đang bán</span>
     ) : row.status === "holding" ? (
       <span className="badge holding">Đang giữ</span>
+    ) : row.status === "gone" ? (
+      <span className="badge unknown">Không còn trong kho</span>
     ) : row.status === "pending_buy" ? (
       <span className="badge pending">Đang mua · chờ xác nhận</span>
     ) : row.status === "pending_sell" ? (
@@ -899,6 +999,16 @@ function ItemCard({
             >
               Khảo giá trên CSFloat ↗
             </a>
+          )}
+          {row.status === "gone" && (
+            <button className="small ghost" onClick={() => onKeep(true)} title="Món này vẫn còn, chỉ là chưa hiện trong kho (ví dụ còn khoá giao dịch)">
+              Vẫn đang giữ
+            </button>
+          )}
+          {kept && row.status === "holding" && (
+            <button className="small ghost" onClick={() => onKeep(false)}>
+              Bỏ đánh dấu giữ
+            </button>
           )}
           {link && (
             <a href={link} target="_blank" rel="noopener noreferrer">
