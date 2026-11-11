@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
-import { classifyInventory, type HoldingInfo, type InvItem, type InvSource } from "@/lib/inventory";
+import { classifyInventory, estimateInventoryValue, itemValueCents, type HoldingInfo, type InvItem, type InvSource } from "@/lib/inventory";
 import { itemKeyOf } from "@/lib/pnl";
-import { floatStr, listingLink, searchLink } from "@/lib/format";
+import { floatStr, listingLink, searchLink, usd } from "@/lib/format";
 import SkinImage from "./SkinImage";
 
 const LS_INV = "csf_inventory_cache2"; // dữ liệu kho đồ lấy từ CSFloat
@@ -120,6 +120,7 @@ export default function Inventory({
     [base, category],
   );
 
+  const value = useMemo(() => estimateInventoryValue(items), [items]);
   const missingTotal = classified.missing.reduce((a, m) => a + m.count, 0);
 
   return (
@@ -159,6 +160,15 @@ export default function Inventory({
               <div className="label">Tổng trong kho</div>
               <div className="value">{items.length}</div>
               <div className="note">Đang rao trên CSFloat: {counts.listed}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Giá trị ước tính</div>
+              <div className="value">{value.priced > 0 ? usd(value.totalCents) : "—"}</div>
+              <div className="note">
+                {value.priced > 0
+                  ? `Tính được ${value.priced}/${value.total} món (giá đang rao, hoặc giá tham khảo của CSFloat)`
+                  : "CSFloat không kèm giá trong dữ liệu kho đồ này. Hãy bấm Làm mới kho đồ."}
+              </div>
             </div>
             <div className="stat">
               <div className="label">Khớp CSFloat</div>
@@ -264,6 +274,12 @@ export default function Inventory({
                         {it.floatValue != null ? `Float ${floatStr(it.floatValue)}` : "Không có float"}
                         {it.paintSeed != null ? ` · Seed ${it.paintSeed}` : ""}
                       </div>
+                      {itemValueCents(it) != null && (
+                        <div className="meta">
+                          {it.listedPriceCents != null ? "Đang rao " : "Tham khảo "}
+                          <b style={{ color: "var(--text)" }}>{usd(itemValueCents(it))}</b>
+                        </div>
+                      )}
                       <div className="meta">
                         <span className={`badge ${it.source === "csfloat" ? "listed" : "unknown"}`} style={{ marginLeft: 0 }}>
                           {it.source === "csfloat" ? "Khớp CSFloat" : "Ngoài CSFloat"}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findGoneRowKeys, classifyInventory, normalizeCsfloatInventory, parseSteamId, type InvItem } from "../lib/inventory.ts";
+import { estimateInventoryValue, findGoneRowKeys, classifyInventory, normalizeCsfloatInventory, parseSteamId, type InvItem } from "../lib/inventory.ts";
 
 test("parseSteamId nhận SteamID64 và link /profiles/, từ chối link /id/ và chuỗi sai", () => {
   assert.equal(parseSteamId("76561198000000000"), "76561198000000000");
@@ -70,8 +70,25 @@ test("findGoneRowKeys: loại món không còn trong kho, giữ món mới mua v
     mk("c", "Case", 30), // không có trong kho -> mất
     mk("d", "Case2", 2), // mới mua, còn khoá -> giữ
   ];
-  const inv: InvItem[] = [{ assetId: "1", name: "Package", iconUrl: null, floatValue: null, paintSeed: null, listingId: null }];
+  const inv: InvItem[] = [{ assetId: "1", name: "Package", iconUrl: null, floatValue: null, paintSeed: null, listingId: null, listedPriceCents: null, refPriceCents: null }];
   const gone = findGoneRowKeys(rows, inv, keyOf, now);
   assert.deepEqual([...gone].sort(), ["a", "c"]);
   assert.equal(findGoneRowKeys(rows, [], keyOf, now).size, 0);
+});
+
+test("estimateInventoryValue: ưu tiên giá đang rao, rồi giá tham khảo, bỏ qua món không có giá", () => {
+  const base = { iconUrl: null, floatValue: null, paintSeed: null, listingId: null };
+  const items: InvItem[] = [
+    { ...base, assetId: "1", name: "A", listedPriceCents: 1000, refPriceCents: 900 },
+    { ...base, assetId: "2", name: "B", listedPriceCents: null, refPriceCents: 500 },
+    { ...base, assetId: "3", name: "C", listedPriceCents: null, refPriceCents: null },
+  ];
+  assert.deepEqual(estimateInventoryValue(items), { totalCents: 1500, priced: 2, total: 3 });
+  const parsed = normalizeCsfloatInventory([
+    { asset_id: "9", market_hash_name: "X", reference: { predicted_price: 1234 } },
+    { asset_id: "8", market_hash_name: "Y", listing_id: "L", price: 777, reference: { base_price: 600 } },
+  ]);
+  assert.equal(parsed?.[0].refPriceCents, 1234);
+  assert.equal(parsed?.[1].listedPriceCents, 777);
+  assert.equal(parsed?.[1].refPriceCents, 600);
 });

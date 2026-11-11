@@ -8,6 +8,29 @@ export interface InvItem {
   paintSeed: number | null;
   /** ID listing nếu món này đang được rao trong stall CSFloat của bạn */
   listingId: string | null;
+  /** Giá đang rao (cent) nếu món đang trong stall */
+  listedPriceCents: number | null;
+  /** Giá tham khảo CSFloat (cent), nếu API có trả về (reference.predicted_price hoặc base_price) */
+  refPriceCents: number | null;
+}
+
+/** Giá trị ước tính của một món: ưu tiên giá đang rao, rồi tới giá tham khảo. */
+export function itemValueCents(it: Pick<InvItem, "listedPriceCents" | "refPriceCents">): number | null {
+  return it.listedPriceCents ?? it.refPriceCents ?? null;
+}
+
+/** Tổng giá trị ước tính và số món tính được giá. */
+export function estimateInventoryValue(items: InvItem[]): { totalCents: number; priced: number; total: number } {
+  let totalCents = 0;
+  let priced = 0;
+  for (const it of items) {
+    const v = itemValueCents(it);
+    if (v != null) {
+      totalCents += v;
+      priced++;
+    }
+  }
+  return { totalCents, priced, total: items.length };
 }
 
 export type InvSource = "csfloat" | "other";
@@ -17,6 +40,10 @@ export interface ClassifiedItem extends InvItem {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
+
+function numOrNull(v: Any): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+}
 
 /** Chuyển JSON của /me/inventory thành danh sách món. Chấp nhận mảng trần hoặc đối tượng có `data`. */
 export function normalizeCsfloatInventory(data: Any): InvItem[] | null {
@@ -40,6 +67,8 @@ export function normalizeCsfloatInventory(data: Any): InvItem[] | null {
       floatValue: typeof it.float_value === "number" ? it.float_value : null,
       paintSeed: typeof it.paint_seed === "number" ? it.paint_seed : null,
       listingId: it.listing_id != null && it.listing_id !== "" ? String(it.listing_id) : null,
+      listedPriceCents: numOrNull(raw?.price) ?? numOrNull(it.price),
+      refPriceCents: numOrNull((it.reference ?? raw?.reference)?.predicted_price) ?? numOrNull((it.reference ?? raw?.reference)?.base_price),
     });
   }
   return out;
