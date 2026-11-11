@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryOf, type Category } from "@/lib/category";
 import { classifyInventory, type HoldingInfo, type InvItem, type InvSource } from "@/lib/inventory";
 import { itemKeyOf } from "@/lib/pnl";
-import { floatStr, listingLink } from "@/lib/format";
+import { floatStr, listingLink, searchLink } from "@/lib/format";
 import SkinImage from "./SkinImage";
 
 const LS_INV = "csf_inventory_cache2"; // dữ liệu kho đồ lấy từ CSFloat
@@ -38,11 +38,13 @@ export default function Inventory({
   holding,
   hasTrades,
   onItems,
+  tol,
 }: {
   apiKey: string;
   holding: Record<string, HoldingInfo>;
   hasTrades: boolean;
   onItems?: (items: InvItem[]) => void;
+  tol: number;
 }) {
   const [items, setItems] = useState<InvItem[]>([]);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
@@ -272,6 +274,14 @@ export default function Inventory({
                           </span>
                         )}
                       </div>
+                      <a
+                        className="btn small"
+                        href={searchLink(it.name, it.floatValue, tol)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Khảo giá trên CSFloat ↗
+                      </a>
                       {link && (
                         <a href={link} target="_blank" rel="noopener noreferrer" className="meta">
                           Mở listing trên CSFloat ↗

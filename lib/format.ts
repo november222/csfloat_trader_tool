@@ -41,27 +41,13 @@ export function signClass(v: number | null | undefined): string {
 }
 
 /** Trang tìm kiếm CSFloat đã lọc sẵn theo tên + khoảng float (mở bằng trình duyệt của bạn, không qua server). */
-export function searchLink(name: string, float: number, tol: number): string {
-  const q = new URLSearchParams({
-    market_hash_name: name,
-    min_float: String(Math.max(0, float - tol)),
-    max_float: String(Math.min(1, float + tol)),
-    sort_by: "lowest_price",
-    type: "buy_now",
-  });
+export function searchLink(name: string, float: number | null, tol: number): string {
+  const q = new URLSearchParams({ market_hash_name: name });
+  if (float != null) {
+    q.set("min_float", String(Math.max(0, float - tol)));
+    q.set("max_float", String(Math.min(1, float + tol)));
+  }
+  q.set("sort_by", "lowest_price");
+  q.set("type", "buy_now");
   return `https://csfloat.com/search?${q.toString()}`;
-}
-
-/** Danh sách URL ảnh để thử lần lượt (CDN Steam đôi khi thiếu ảnh ở một máy chủ hoặc một kích thước). */
-export function imageCandidates(iconUrl: string | null | undefined): string[] {
-  if (!iconUrl) return [];
-  if (iconUrl.startsWith("http")) return [iconUrl];
-  const hosts = [
-    "community.cloudflare.steamstatic.com",
-    "community.fastly.steamstatic.com",
-    "community.akamai.steamstatic.com",
-  ];
-  const out = hosts.map((h) => `https://${h}/economy/image/${iconUrl}/256fx256f`);
-  out.push(`https://${hosts[0]}/economy/image/${iconUrl}/360fx360f`, `https://${hosts[0]}/economy/image/${iconUrl}`);
-  return out;
 }

@@ -529,7 +529,7 @@ export default function Home() {
       </div>
 
       {view === "inventory" && (
-        <Inventory apiKey={apiKey} holding={holding} hasTrades={hasData} onItems={setInvItems} />
+        <Inventory apiKey={apiKey} holding={holding} hasTrades={hasData} onItems={setInvItems} tol={tol} />
       )}
 
       {view === "trades" && (
